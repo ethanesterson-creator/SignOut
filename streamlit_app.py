@@ -59,6 +59,8 @@ def main():
         page_icon="🚪",
         layout="wide",
     )
+    if Path("logo-header-2.png").exists():
+        st.sidebar.image("logo-header-2.png", use_column_width=True)
 
     st.title("Counselor Sign-Out")
     st.caption(
