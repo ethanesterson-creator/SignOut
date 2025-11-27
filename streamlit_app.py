@@ -157,7 +157,7 @@ def main():
                     df.loc[df["record_id"] == row["record_id"], "status"] = "IN"
                     save_data(df)
                     st.success(f"{row['name']} signed back IN.")
-                    st.experimental_rerun()
+                    st.rerun()
 
     # (Optional) history download for directors – doesn’t affect counselors
     with st.expander("History (for leadership)"):
