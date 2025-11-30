@@ -1,6 +1,6 @@
 [theme]
-primaryColor = "#003DA5"              # Bauercrest blue
+primaryColor = "#150b4f"              # Bauercrest blue
 backgroundColor = "#FFFFFF"
 secondaryBackgroundColor = "#F2F6FF"  # light blue/gray
-textColor = "#001A33"
+textColor = "##150b4f"
 font = "sans serif"
