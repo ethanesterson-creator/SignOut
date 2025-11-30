@@ -20,10 +20,23 @@ REASONS = [
 # >>> Add / remove names in this list as needed. <<<
 STAFF_NAMES = [
     "Ethan Esterson",
-    "Counselor A",
-    "Counselor B",
-    "Counselor C",
-    "Counselor D",
+    "Asher Schiillin",
+    "Jaden Pollack",
+    "Ethan Goldberg",
+    "Colby Karp",
+    "Jordan Bornstein",
+    "Dylan Israel",
+    "Zach Baum",
+    "Darren Sands",
+    "Brody Masters",
+    "Matt Schultz",
+    "Max Pollack",
+    "Will Carp",
+    "Josh Poscover",
+    "Evan Ashe",
+    "Riley Schneller",
+    "Joey Rosenfeld",
+    "Justin Feldman",
 ]
 
 HISTORY_PASSWORD = "Hyaffa26"  # password to view/download history
