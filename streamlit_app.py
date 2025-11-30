@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo  # built-in timezone support (Eastern)
 
 # --------------- Settings ---------------
 
@@ -19,23 +20,10 @@ REASONS = [
 # >>> Add / remove names in this list as needed. <<<
 STAFF_NAMES = [
     "Ethan Esterson",
-    "Asher Schiillin",
-    "Jaden Pollack",
-    "Ethan Goldberg",
-    "Colby Karp",
-    "Jordan Bornstein",
-    "Dylan Israel",
-    "Zach Baum",
-    "Darren Sands",
-    "Brody Masters",
-    "Matt Schultz",
-    "Max Pollack",
-    "Will Carp",
-    "Josh Poscover",
-    "Evan Ashe",
-    "Riley Schneller",
-    "Joey Rosenfeld",
-    "Justin Feldman",
+    "Counselor A",
+    "Counselor B",
+    "Counselor C",
+    "Counselor D",
 ]
 
 HISTORY_PASSWORD = "Hyaffa26"  # password to view/download history
@@ -50,6 +38,8 @@ DATA_COLUMNS = [
     "time_in",
     "status",
 ]
+
+EASTERN = ZoneInfo("America/New_York")
 
 
 # ------------- Data helpers -------------
@@ -77,28 +67,17 @@ def next_record_id(df: pd.DataFrame) -> int:
     return int(df["record_id"].max()) + 1
 
 
-# ------------- Main page UI -------------
+# ------------- Page: Sign In / Out -------------
 
 
-def main():
-    st.set_page_config(
-        page_title="Counselor Sign-Out",
-        page_icon="🚪",
-        layout="wide",
-    )
-
-    # Bauercrest logo in sidebar if present
-    logo_path = Path("logo-header-2.png")  # change if your logo file name is different
-    if logo_path.exists():
-        st.sidebar.image(str(logo_path), use_column_width=True)
+def page_sign_in_out():
+    df = load_data()
 
     st.title("Counselor Sign-Out")
     st.caption(
         "This app should stay open at the Big House. "
         "Counselors MUST sign out when leaving camp and sign back in when they return."
     )
-
-    df = load_data()
 
     # ---------- Sign OUT section ----------
     st.subheader("Sign OUT")
@@ -138,7 +117,7 @@ def main():
                 st.error("Please type the reason for 'Other'.")
             else:
                 record_id = next_record_id(df)
-                time_out = datetime.now()
+                time_out = datetime.now(EASTERN)  # Eastern time
 
                 if reason == "Other":
                     full_reason = other_reason.strip()
@@ -177,7 +156,9 @@ def main():
     else:
         # Nice display table
         display = out_now.copy()
-        display["time_out"] = display["time_out"].dt.strftime("%Y-%m-%d %I:%M %p")
+        display["time_out"] = display["time_out"].apply(
+            lambda x: x.strftime("%Y-%m-%d %I:%M %p") if pd.notna(x) else ""
+        )
         display = display[["record_id", "name", "full_reason", "time_out"]]
         display = display.rename(
             columns={
@@ -194,16 +175,20 @@ def main():
         for _, row in out_now.iterrows():
             col1, col2 = st.columns([4, 1])
             with col1:
+                out_time_display = (
+                    row["time_out"].strftime("%I:%M %p") if pd.notna(row["time_out"]) else "Unknown"
+                )
                 st.write(
                     f"**{row['name']}** – {row['full_reason']} "
-                    f"(OUT since {row['time_out'].strftime('%I:%M %p')})"
+                    f"(OUT since {out_time_display})"
                 )
             with col2:
                 if st.button("Sign IN", key=f"sign_in_{row['record_id']}"):
-                    df.loc[df["record_id"] == row["record_id"], "time_in"] = datetime.now()
+                    now_eastern = datetime.now(EASTERN)
+                    df.loc[df["record_id"] == row["record_id"], "time_in"] = now_eastern
                     df.loc[df["record_id"] == row["record_id"], "status"] = "IN"
                     save_data(df)
-                    st.success(f"{row['name']} signed back IN.")
+                    st.success(f"{row['name']} signed back IN at {now_eastern.strftime('%I:%M %p')}.")
                     st.rerun()
 
     # ---------- History (password protected) ----------
@@ -230,6 +215,59 @@ def main():
                 )
         elif password:
             st.error("Incorrect password.")
+
+
+# ------------- Page: Out Board -------------
+
+
+def page_out_board():
+    st.title("Who’s Out Right Now")
+
+    df = load_data()
+    out_now = df[df["status"] == "OUT"].copy()
+
+    if out_now.empty:
+        st.info("No counselors are currently signed out.")
+        return
+
+    # Big simple board
+    out_now = out_now.sort_values("time_out")
+
+    st.markdown("### Currently OUT")
+    for _, row in out_now.iterrows():
+        out_time_display = (
+            row["time_out"].strftime("%I:%M %p") if pd.notna(row["time_out"]) else "Unknown"
+        )
+        st.markdown(
+            f"**{row['name']}** — {row['full_reason']} &nbsp;&nbsp; "
+            f"(OUT since {out_time_display})"
+        )
+
+
+# ------------- Main -------------
+
+
+def main():
+    st.set_page_config(
+        page_title="Counselor Sign-Out",
+        page_icon="🚪",
+        layout="wide",
+    )
+
+    # Bauercrest logo in sidebar if present
+    logo_path = Path("logo-header-2.png")  # change if your logo file name is different
+    if logo_path.exists():
+        st.sidebar.image(str(logo_path), use_column_width=True)
+
+    page = st.sidebar.radio(
+        "Go to",
+        ["Sign In / Out", "Out Board"],
+    )
+
+    if page == "Sign In / Out":
+        page_sign_in_out()
+    elif page == "Out Board":
+        page_out_board()
 
 
 if __name__ == "__main__":
