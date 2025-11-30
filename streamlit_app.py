@@ -14,6 +14,32 @@ REASONS = [
     "Other",
 ]
 
+# Staff list used for the name dropdown.
+# Streamlit lets you type a few letters to filter this dropdown.
+# >>> Add / remove names in this list as needed. <<<
+STAFF_NAMES = [
+    "Ethan Esterson",
+    "Asher Schiillin",
+    "Jaden Pollack",
+    "Ethan Goldberg",
+    "Colby Karp",
+    "Jordan Bornstein",
+    "Dylan Israel",
+    "Zach Baum",
+    "Darren Sands",
+    "Brody Masters",
+    "Matt Schultz",
+    "Max Pollack",
+    "Will Carp",
+    "Josh Poscover",
+    "Evan Ashe",
+    "Riley Schneller",
+    "Joey Rosenfeld",
+    "Justin Feldman",
+]
+
+HISTORY_PASSWORD = "Hyaffa26"  # password to view/download history
+
 DATA_COLUMNS = [
     "record_id",
     "name",
@@ -24,6 +50,7 @@ DATA_COLUMNS = [
     "time_in",
     "status",
 ]
+
 
 # ------------- Data helpers -------------
 
@@ -59,8 +86,11 @@ def main():
         page_icon="🚪",
         layout="wide",
     )
-    if Path("logo-header-2.png").exists():
-        st.sidebar.image("logo-header-2.png", use_column_width=True)
+
+    # Bauercrest logo in sidebar if present
+    logo_path = Path("logo-header-2.png")  # change if your logo file name is different
+    if logo_path.exists():
+        st.sidebar.image(str(logo_path), use_column_width=True)
 
     st.title("Counselor Sign-Out")
     st.caption(
@@ -74,7 +104,24 @@ def main():
     st.subheader("Sign OUT")
 
     with st.form("sign_out_form", clear_on_submit=True):
-        name = st.text_input("Your name")
+        # Name dropdown with type-to-search
+        name_options = ["-- Select name --"] + STAFF_NAMES + ["Other (not listed)"]
+        name_choice = st.selectbox(
+            "Your name (type to search)",
+            name_options,
+        )
+
+        manual_name = ""
+        if name_choice == "Other (not listed)":
+            manual_name = st.text_input("Type your name")
+
+        # Final name value we will use
+        if name_choice == "-- Select name --":
+            name = manual_name.strip()  # will be empty if not filled
+        elif name_choice == "Other (not listed)":
+            name = manual_name.strip()
+        else:
+            name = name_choice.strip()
 
         reason = st.selectbox("Reason for leaving", REASONS)
 
@@ -85,8 +132,8 @@ def main():
         submitted = st.form_submit_button("Sign OUT")
 
         if submitted:
-            if not name.strip():
-                st.error("Please type your name.")
+            if not name:
+                st.error("Please select or type your name.")
             elif reason == "Other" and not other_reason.strip():
                 st.error("Please type the reason for 'Other'.")
             else:
@@ -100,7 +147,7 @@ def main():
 
                 new_row = {
                     "record_id": record_id,
-                    "name": name.strip(),
+                    "name": name,
                     "reason": reason,
                     "other_reason": other_reason.strip(),
                     "full_reason": full_reason,
@@ -113,7 +160,7 @@ def main():
                 save_data(df)
 
                 st.success(
-                    f"{name.strip()} signed OUT at {time_out.strftime('%Y-%m-%d %I:%M %p')} "
+                    f"{name} signed OUT at {time_out.strftime('%Y-%m-%d %I:%M %p')} "
                     f"for: {full_reason}"
                 )
 
@@ -159,24 +206,30 @@ def main():
                     st.success(f"{row['name']} signed back IN.")
                     st.rerun()
 
-    # (Optional) history download for directors – doesn’t affect counselors
-    with st.expander("History (for leadership)"):
-        if not df.empty:
-            hist = df.copy()
-            for col in ["time_out", "time_in"]:
-                hist[col] = hist[col].apply(
-                    lambda x: x.strftime("%Y-%m-%d %I:%M %p") if pd.notna(x) else ""
+    # ---------- History (password protected) ----------
+    with st.expander("History (for leadership – password required)"):
+        password = st.text_input("Enter password to view history", type="password")
+
+        if password == HISTORY_PASSWORD:
+            df_hist = load_data()
+            if df_hist.empty:
+                st.write("No records yet.")
+            else:
+                hist = df_hist.copy()
+                for col in ["time_out", "time_in"]:
+                    hist[col] = hist[col].apply(
+                        lambda x: x.strftime("%Y-%m-%d %I:%M %p") if pd.notna(x) else ""
+                    )
+                st.dataframe(hist, use_container_width=True)
+                csv_bytes = hist.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "Download history CSV",
+                    data=csv_bytes,
+                    file_name="counselor_signout_history.csv",
+                    mime="text/csv",
                 )
-            st.dataframe(hist, use_container_width=True)
-            csv_bytes = hist.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                "Download history CSV",
-                data=csv_bytes,
-                file_name="counselor_signout_history.csv",
-                mime="text/csv",
-            )
-        else:
-            st.write("No records yet.")
+        elif password:
+            st.error("Incorrect password.")
 
 
 if __name__ == "__main__":
