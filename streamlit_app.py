@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo  # built-in timezone support (Eastern)
+from zoneinfo import ZoneInfo  # timezone support
 
 # --------------- Settings ---------------
 
@@ -39,7 +39,7 @@ STAFF_NAMES = [
     "Justin Feldman",
 ]
 
-HISTORY_PASSWORD = "Hyaffa26"  # password to view/download history
+HISTORY_PASSWORD = "Hyaffa26"  # password to view/download/delete history
 
 DATA_COLUMNS = [
     "record_id",
@@ -53,6 +53,11 @@ DATA_COLUMNS = [
 ]
 
 EASTERN = ZoneInfo("America/New_York")
+
+
+def now_eastern_naive() -> datetime:
+    """Return current time in Eastern, but without timezone info (stored as plain Eastern)."""
+    return datetime.now(EASTERN).replace(tzinfo=None)
 
 
 # ------------- Data helpers -------------
@@ -130,7 +135,7 @@ def page_sign_in_out():
                 st.error("Please type the reason for 'Other'.")
             else:
                 record_id = next_record_id(df)
-                time_out = datetime.now(EASTERN)  # Eastern time
+                time_out = now_eastern_naive()  # Eastern, stored as plain datetime
 
                 if reason == "Other":
                     full_reason = other_reason.strip()
@@ -197,11 +202,11 @@ def page_sign_in_out():
                 )
             with col2:
                 if st.button("Sign IN", key=f"sign_in_{row['record_id']}"):
-                    now_eastern = datetime.now(EASTERN)
-                    df.loc[df["record_id"] == row["record_id"], "time_in"] = now_eastern
+                    now_in = now_eastern_naive()
+                    df.loc[df["record_id"] == row["record_id"], "time_in"] = now_in
                     df.loc[df["record_id"] == row["record_id"], "status"] = "IN"
                     save_data(df)
-                    st.success(f"{row['name']} signed back IN at {now_eastern.strftime('%I:%M %p')}.")
+                    st.success(f"{row['name']} signed back IN at {now_in.strftime('%I:%M %p')}.")
                     st.rerun()
 
     # ---------- History (password protected) ----------
@@ -219,6 +224,8 @@ def page_sign_in_out():
                         lambda x: x.strftime("%Y-%m-%d %I:%M %p") if pd.notna(x) else ""
                     )
                 st.dataframe(hist, use_container_width=True)
+
+                # Download CSV
                 csv_bytes = hist.to_csv(index=False).encode("utf-8")
                 st.download_button(
                     "Download history CSV",
@@ -226,6 +233,38 @@ def page_sign_in_out():
                     file_name="counselor_signout_history.csv",
                     mime="text/csv",
                 )
+
+                st.markdown("---")
+                st.subheader("Delete logs")
+
+                # Delete selected records
+                # Build friendly labels for selection
+                options = []
+                for _, r in df_hist.iterrows():
+                    out_str = r["time_out"].strftime("%Y-%m-%d %I:%M %p") if pd.notna(r["time_out"]) else "Unknown"
+                    label = f"ID {r['record_id']} – {r['name']} – {r['full_reason']} – OUT {out_str}"
+                    options.append((label, int(r["record_id"])))
+
+                if options:
+                    labels = [o[0] for o in options]
+                    label_to_id = {o[0]: o[1] for o in options}
+                    selected_labels = st.multiselect("Select records to delete", labels)
+                    selected_ids = [label_to_id[l] for l in selected_labels]
+
+                    if selected_ids and st.button("Delete selected records"):
+                        df_new = df_hist[~df_hist["record_id"].isin(selected_ids)]
+                        save_data(df_new)
+                        st.success(f"Deleted {len(selected_ids)} record(s).")
+                        st.rerun()
+
+                st.markdown("#### Delete ALL logs")
+                confirm_all = st.checkbox("I understand this will delete EVERY record.")
+                if confirm_all and st.button("Delete ALL logs now"):
+                    empty_df = pd.DataFrame(columns=DATA_COLUMNS)
+                    save_data(empty_df)
+                    st.success("All logs deleted.")
+                    st.rerun()
+
         elif password:
             st.error("Incorrect password.")
 
@@ -243,7 +282,6 @@ def page_out_board():
         st.info("No counselors are currently signed out.")
         return
 
-    # Big simple board
     out_now = out_now.sort_values("time_out")
 
     st.markdown("### Currently OUT")
