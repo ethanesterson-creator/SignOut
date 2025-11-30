@@ -1,21 +1,2 @@
 streamlit
 pandas
-
-"Ethan Esterson",
-    "Asher Schiillin",
-    "Jaden Pollack",
-    "Ethan Goldberg",
-    "Colby Karp",
-    "Jordan Bornstein",
-    "Dylan Israel",
-    "Zach Baum",
-    "Darren Sands",
-    "Brody Masters",
-    "Matt Schultz",
-    "Max Pollack",
-    "Will Carp",
-    "Josh Poscover",
-    "Evan Ashe",
-    "Riley Schneller",
-    "Joey Rosenfeld",
-    "Justin Feldman",
