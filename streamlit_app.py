@@ -210,7 +210,7 @@ def page_sign_in_out():
                     st.rerun()
 
     # ---------- History (password protected) ----------
-    with st.expander("History (for leadership – password required)"):
+    with st.expander("History (for admin – password required)"):
         password = st.text_input("Enter password to view history", type="password")
 
         if password == HISTORY_PASSWORD:
