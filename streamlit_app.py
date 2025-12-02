@@ -19,8 +19,6 @@ REASONS = [
 # Streamlit lets you type a few letters to filter this dropdown.
 # >>> Add / remove names in this list as needed. <<<
 STAFF_NAMES = [
-    "Ethan Esterson",
-    "Asher Schiillin",
     "Jaden Pollack",
     "Ethan Goldberg",
     "Colby Karp",
@@ -28,6 +26,8 @@ STAFF_NAMES = [
     "Dylan Israel",
     "Zach Baum",
     "Darren Sands",
+    "Ethan Esterson",
+    "Asher Schiillin",
     "Brody Masters",
     "Matt Schultz",
     "Max Pollack",
@@ -38,6 +38,29 @@ STAFF_NAMES = [
     "Joey Rosenfeld",
     "Justin Feldman",
 ]
+
+# Each staff member's 4-digit PIN code.
+# >>> If you want to change a code, just edit the string here. <<<
+STAFF_PINS = {
+    "Jaden Pollack":  "4821",
+    "Ethan Goldberg": "9375",
+    "Colby Karp":     "1064",
+    "Jordan Bornstein": "5293",
+    "Dylan Israel":   "8142",
+    "Zach Baum":      "7309",
+    "Darren Sands":   "2958",
+    "Ethan Esterson": "6417",
+    "Asher Schiillin": "8530",
+    "Brody Masters":  "2194",
+    "Matt Schultz":   "5748",
+    "Max Pollack":    "3605",
+    "Will Carp":      "9182",
+    "Josh Poscover":  "4473",
+    "Evan Ashe":      "7820",
+    "Riley Schneller":"3359",
+    "Joey Rosenfeld": "6041",
+    "Justin Feldman": "8896",
+}
 
 HISTORY_PASSWORD = "Hyaffa26"  # password to view/download/delete history
 
@@ -56,7 +79,7 @@ EASTERN = ZoneInfo("America/New_York")
 
 
 def now_eastern_naive() -> datetime:
-    """Return current time in Eastern, but without timezone info (stored as plain Eastern)."""
+    """Return current time in Eastern, stored as naive datetime (no tzinfo)."""
     return datetime.now(EASTERN).replace(tzinfo=None)
 
 
@@ -94,7 +117,8 @@ def page_sign_in_out():
     st.title("Counselor Sign-Out")
     st.caption(
         "This app should stay open at the Big House. "
-        "Counselors MUST sign out when leaving camp and sign back in when they return."
+        "Counselors MUST sign out when leaving camp and sign back in when they return.\n\n"
+        "For security, each staff member has their own 4-digit code."
     )
 
     # ---------- Sign OUT section ----------
@@ -102,21 +126,15 @@ def page_sign_in_out():
 
     with st.form("sign_out_form", clear_on_submit=True):
         # Name dropdown with type-to-search
-        name_options = ["-- Select name --"] + STAFF_NAMES + ["Other (not listed)"]
+        name_options = ["-- Select name --"] + STAFF_NAMES
         name_choice = st.selectbox(
             "Your name (type to search)",
             name_options,
         )
 
-        manual_name = ""
-        if name_choice == "Other (not listed)":
-            manual_name = st.text_input("Type your name")
-
         # Final name value we will use
         if name_choice == "-- Select name --":
-            name = manual_name.strip()  # will be empty if not filled
-        elif name_choice == "Other (not listed)":
-            name = manual_name.strip()
+            name = ""
         else:
             name = name_choice.strip()
 
@@ -126,40 +144,62 @@ def page_sign_in_out():
         if reason == "Other":
             other_reason = st.text_input("Describe reason")
 
+        # PIN entry
+        pin_input = st.text_input(
+            "Your 4-digit code",
+            type="password",
+            max_chars=4,
+        )
+
         submitted = st.form_submit_button("Sign OUT")
 
         if submitted:
+            # Validate name
             if not name:
-                st.error("Please select or type your name.")
-            elif reason == "Other" and not other_reason.strip():
+                st.error("Please select your name.")
+                return
+
+            # Validate reason
+            if reason == "Other" and not other_reason.strip():
                 st.error("Please type the reason for 'Other'.")
+                return
+
+            # Validate PIN
+            expected_pin = STAFF_PINS.get(name)
+            if expected_pin is None:
+                st.error("This name does not have a configured code. Tell leadership.")
+                return
+            if pin_input != expected_pin:
+                st.error("Incorrect code. Please try again.")
+                return
+
+            # All good, save record
+            record_id = next_record_id(df)
+            time_out = now_eastern_naive()
+
+            if reason == "Other":
+                full_reason = other_reason.strip()
             else:
-                record_id = next_record_id(df)
-                time_out = now_eastern_naive()  # Eastern, stored as plain datetime
+                full_reason = reason
 
-                if reason == "Other":
-                    full_reason = other_reason.strip()
-                else:
-                    full_reason = reason
+            new_row = {
+                "record_id": record_id,
+                "name": name,
+                "reason": reason,
+                "other_reason": other_reason.strip(),
+                "full_reason": full_reason,
+                "time_out": time_out,
+                "time_in": pd.NaT,
+                "status": "OUT",
+            }
 
-                new_row = {
-                    "record_id": record_id,
-                    "name": name,
-                    "reason": reason,
-                    "other_reason": other_reason.strip(),
-                    "full_reason": full_reason,
-                    "time_out": time_out,
-                    "time_in": pd.NaT,
-                    "status": "OUT",
-                }
+            df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+            save_data(df)
 
-                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                save_data(df)
-
-                st.success(
-                    f"{name} signed OUT at {time_out.strftime('%Y-%m-%d %I:%M %p')} "
-                    f"for: {full_reason}"
-                )
+            st.success(
+                f"{name} signed OUT at {time_out.strftime('%Y-%m-%d %I:%M %p')} "
+                f"for: {full_reason}"
+            )
 
     st.markdown("---")
 
@@ -188,10 +228,10 @@ def page_sign_in_out():
         )
         st.dataframe(display, use_container_width=True)
 
-        st.write("Click **Sign IN** next to your name when you return:")
+        st.write("Enter your code and click **Sign IN** next to your name when you return:")
 
         for _, row in out_now.iterrows():
-            col1, col2 = st.columns([4, 1])
+            col1, col2 = st.columns([4, 2])
             with col1:
                 out_time_display = (
                     row["time_out"].strftime("%I:%M %p") if pd.notna(row["time_out"]) else "Unknown"
@@ -201,16 +241,29 @@ def page_sign_in_out():
                     f"(OUT since {out_time_display})"
                 )
             with col2:
+                expected_pin = STAFF_PINS.get(row["name"])
+                pin_key = f"pin_in_{row['record_id']}"
+                pin_in = st.text_input(
+                    "Code",
+                    type="password",
+                    max_chars=4,
+                    key=pin_key,
+                )
                 if st.button("Sign IN", key=f"sign_in_{row['record_id']}"):
-                    now_in = now_eastern_naive()
-                    df.loc[df["record_id"] == row["record_id"], "time_in"] = now_in
-                    df.loc[df["record_id"] == row["record_id"], "status"] = "IN"
-                    save_data(df)
-                    st.success(f"{row['name']} signed back IN at {now_in.strftime('%I:%M %p')}.")
-                    st.rerun()
+                    if expected_pin is not None and pin_in != expected_pin:
+                        st.error("Incorrect code for sign-in.")
+                    else:
+                        now_in = now_eastern_naive()
+                        df.loc[df["record_id"] == row["record_id"], "time_in"] = now_in
+                        df.loc[df["record_id"] == row["record_id"], "status"] = "IN"
+                        save_data(df)
+                        st.success(
+                            f"{row['name']} signed back IN at {now_in.strftime('%I:%M %p')}."
+                        )
+                        st.rerun()
 
     # ---------- History (password protected) ----------
-    with st.expander("History (for admin – password required)"):
+    with st.expander("History (for leadership – password required)"):
         password = st.text_input("Enter password to view history", type="password")
 
         if password == HISTORY_PASSWORD:
@@ -238,7 +291,6 @@ def page_sign_in_out():
                 st.subheader("Delete logs")
 
                 # Delete selected records
-                # Build friendly labels for selection
                 options = []
                 for _, r in df_hist.iterrows():
                     out_str = r["time_out"].strftime("%Y-%m-%d %I:%M %p") if pd.notna(r["time_out"]) else "Unknown"
