@@ -167,7 +167,7 @@ def page_sign_in_out():
             # Validate PIN
             expected_pin = STAFF_PINS.get(name)
             if expected_pin is None:
-                st.error("This name does not have a configured code. Tell leadership.")
+                st.error("This name does not have a configured code. Tell admin.")
                 return
             if pin_input != expected_pin:
                 st.error("Incorrect code. Please try again.")
@@ -263,7 +263,7 @@ def page_sign_in_out():
                         st.rerun()
 
     # ---------- History (password protected) ----------
-    with st.expander("History (for leadership – password required)"):
+    with st.expander("History (for admin – password required)"):
         password = st.text_input("Enter password to view history", type="password")
 
         if password == HISTORY_PASSWORD:
