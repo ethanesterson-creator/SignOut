@@ -5,6 +5,7 @@ from pathlib import Path
 import pytz
 
 import gspread
+from gspread.exceptions import APIError, GSpreadException
 from google.oauth2.service_account import Credentials
 
 # -------------------------------------------------
@@ -56,7 +57,6 @@ EASTERN = pytz.timezone("US/Eastern")
 
 def get_sheet():
     """Authorize and return the Google Sheets worksheet, using Streamlit secrets."""
-    # st.secrets["gcp_service_account"] is a TOML table (dict-like)
     creds_info = dict(st.secrets["gcp_service_account"])
     creds = Credentials.from_service_account_info(
         creds_info,
@@ -69,21 +69,49 @@ def get_sheet():
 
 def ensure_header(sheet):
     """Ensure the logs sheet has a header row."""
-    values = sheet.get_all_values()
+    try:
+        values = sheet.get_all_values()
+    except (APIError, GSpreadException) as e:
+        st.error("Problem reading the sign-out log header from Google Sheets. "
+                 "Please try reloading the page.")
+        st.stop()
+
     if not values:
         header = ["id", "timestamp", "name", "reason", "other_reason", "action", "status"]
         sheet.append_row(header)
 
 
+def empty_logs_df():
+    return pd.DataFrame(
+        columns=["id", "timestamp", "name", "reason", "other_reason", "action", "status"]
+    )
+
+
 def load_logs_df():
-    """Load all logs into a pandas DataFrame."""
-    sheet = get_sheet()
+    """Load all logs into a pandas DataFrame, with error handling."""
+    try:
+        sheet = get_sheet()
+    except Exception:
+        st.error("Could not connect to Google Sheets. Check your internet "
+                 "connection and try again.")
+        return empty_logs_df()
+
     ensure_header(sheet)
 
-    records = sheet.get_all_records()  # Uses first row as header
+    try:
+        records = sheet.get_all_records()  # Uses first row as header
+    except GSpreadException as e:
+        st.error("Problem reading the sign-out log from Google Sheets "
+                 "(sheet format issue). Please check the 'logs' sheet header "
+                 "or try again.")
+        return empty_logs_df()
+    except APIError as e:
+        st.error("Temporary error talking to Google Sheets. Please wait a "
+                 "moment and reload the page.")
+        return empty_logs_df()
+
     if not records:
-        return pd.DataFrame(columns=["id", "timestamp", "name", "reason",
-                                     "other_reason", "action", "status"])
+        return empty_logs_df()
 
     df = pd.DataFrame(records)
 
@@ -102,48 +130,65 @@ def load_logs_df():
 
 
 def append_log_row(name: str, reason: str, other_reason: str, action: str, status: str):
-    """Append a new log row to the sheet."""
-    sheet = get_sheet()
-    df = load_logs_df()
-    next_id = 1 if df.empty or df["id"].isna().all() else int(df["id"].max()) + 1
+    """Append a new log row to the sheet, safely."""
+    try:
+        sheet = get_sheet()
+        df = load_logs_df()
+        next_id = 1 if df.empty or df["id"].isna().all() else int(df["id"].max()) + 1
 
-    now = datetime.now(EASTERN)
-    timestamp_str = now.isoformat()
+        now = datetime.now(EASTERN)
+        timestamp_str = now.isoformat()
 
-    row = [next_id, timestamp_str, name, reason, other_reason, action, status]
-    sheet.append_row(row)
+        row = [next_id, timestamp_str, name, reason, other_reason, action, status]
+        sheet.append_row(row)
+    except (APIError, GSpreadException):
+        st.error("Could not record this sign-in/sign-out due to a problem "
+                 "talking to Google Sheets. Please tell a senior staff member "
+                 "and try again in a minute.")
+        st.stop()
 
 
 def clear_all_logs():
     """Delete all logs from the sheet (re-add header)."""
-    sheet = get_sheet()
-    sheet.clear()
-    ensure_header(sheet)
+    try:
+        sheet = get_sheet()
+        sheet.clear()
+        ensure_header(sheet)
+    except (APIError, GSpreadException):
+        st.error("Could not clear logs in Google Sheets. Please try again later.")
+        st.stop()
 
 
 def delete_logs_by_ids(ids_to_delete):
     """Delete specific logs by id (rewrite sheet)."""
-    sheet = get_sheet()
-    df = load_logs_df()
+    try:
+        sheet = get_sheet()
+        df = load_logs_df()
+    except (APIError, GSpreadException):
+        st.error("Could not update logs in Google Sheets. Please try again later.")
+        st.stop()
+
     if df.empty:
         return
 
     df_keep = df[~df["id"].isin(ids_to_delete)].copy()
 
-    sheet.clear()
-    ensure_header(sheet)
-
-    if not df_keep.empty:
-        df_out = df_keep.copy()
-        # Ensure we write the right columns in the right order
-        cols = ["id", "timestamp", "name", "reason", "other_reason", "action", "status"]
-        for col in cols:
-            if col not in df_out.columns:
-                df_out[col] = ""
-        df_out["timestamp"] = df_out["timestamp"].astype(str)
-        rows = df_out[cols].values.tolist()
-        if rows:
-            sheet.append_rows(rows)
+    try:
+        sheet.clear()
+        ensure_header(sheet)
+        if not df_keep.empty:
+            df_out = df_keep.copy()
+            cols = ["id", "timestamp", "name", "reason", "other_reason", "action", "status"]
+            for col in cols:
+                if col not in df_out.columns:
+                    df_out[col] = ""
+            df_out["timestamp"] = df_out["timestamp"].astype(str)
+            rows = df_out[cols].values.tolist()
+            if rows:
+                sheet.append_rows(rows)
+    except (APIError, GSpreadException):
+        st.error("Could not finish deleting selected log entries. Please try again later.")
+        st.stop()
 
 
 # -------------------------------------------------
@@ -155,7 +200,6 @@ def get_currently_out(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=["name", "reason", "other_reason", "timestamp"])
 
-    # Sort by time, then take last row per name
     df_sorted = df.sort_values("timestamp")
     last_actions = df_sorted.groupby("name").tail(1)
     out_rows = last_actions[last_actions["status"] == "OUT"].copy()
@@ -170,7 +214,6 @@ def format_time(dt):
     if pd.isna(dt):
         return ""
     try:
-        # Already stored as Eastern time in ISO
         return dt.strftime("%Y-%m-%d %I:%M %p")
     except Exception:
         return str(dt)
@@ -204,7 +247,6 @@ def page_sign_in_out():
 
     already_out = False
     if name:
-        # Check if this person is already out
         if not df_out.empty and name in df_out["name"].values:
             already_out = True
             st.warning(f"{name} is already signed out. They should sign back in first.")
@@ -230,7 +272,7 @@ def page_sign_in_out():
     st.subheader("Sign In")
 
     df_logs = load_logs_df()
-    df_out = get_currently_out(df_logs)  # refresh
+    df_out = get_currently_out(df_logs)
 
     if df_out.empty:
         st.info("No one is currently signed out.")
@@ -252,7 +294,6 @@ def page_sign_in_out():
             elif STAFF_PINS[name_in] != pin_in:
                 st.error("Incorrect code.")
             else:
-                # Use last OUT row's reason as reference for this IN event
                 row = df_out[df_out["name"] == name_in].iloc[0]
                 last_reason = row["reason"]
                 last_other = row["other_reason"]
@@ -285,7 +326,6 @@ def page_whos_out():
 def page_admin_history():
     st.header("Admin / History")
 
-    # ---------------- PASSWORD GATE ----------------
     if "admin_authenticated" not in st.session_state:
         st.session_state.admin_authenticated = False
 
@@ -303,15 +343,12 @@ def page_admin_history():
                     st.error("Incorrect password.")
         st.stop()
 
-    # Optional lock/logout
     with st.expander("Admin Session", expanded=False):
         st.caption("You are logged in to the admin area.")
         if st.button("Lock Admin Area", key="admin_logout_btn"):
             st.session_state.admin_authenticated = False
             st.success("Admin area locked again.")
             st.rerun()
-
-    # ---------------- HISTORY CONTENT ----------------
 
     df_logs = load_logs_df()
 
@@ -336,7 +373,6 @@ def page_admin_history():
 
     st.dataframe(df_display, use_container_width=True)
 
-    # Download button
     csv_data = df_display.to_csv(index=False)
     st.download_button(
         "Download Full Log as CSV",
@@ -347,7 +383,6 @@ def page_admin_history():
 
     st.markdown("---")
 
-    # Delete specific logs
     st.subheader("Delete Specific Log Entries (for testing / pre-season only)")
 
     ids = df_logs["id"].dropna().astype(int).tolist()
@@ -367,7 +402,6 @@ def page_admin_history():
             key="admin_delete_specific_multiselect",
         )
 
-        # Map labels back to IDs
         selected_ids = [
             log_id for log_id, label in id_to_label.items()
             if label in selected_labels
@@ -380,7 +414,6 @@ def page_admin_history():
 
     st.markdown("---")
 
-    # Delete ALL logs
     st.subheader("Delete ALL Logs (for testing / pre-season only)")
     st.error(
         "WARNING: This will delete ALL sign-in/out records from Google Sheets. "
@@ -407,7 +440,6 @@ def main():
         layout="wide",
     )
 
-    # Sidebar branding
     st.sidebar.title("Bauercrest Staff Sign-Out")
 
     logo_path = Path("logo-header-2.png")
