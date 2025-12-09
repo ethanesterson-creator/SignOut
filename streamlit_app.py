@@ -3,7 +3,6 @@ import pandas as pd
 from datetime import datetime
 from pathlib import Path
 import pytz
-import json
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -57,8 +56,8 @@ EASTERN = pytz.timezone("US/Eastern")
 
 def get_sheet():
     """Authorize and return the Google Sheets worksheet, using Streamlit secrets."""
-    # st.secrets["gcp_service_account"] is a JSON string we stored in the secrets UI
-    creds_info = json.loads(st.secrets["gcp_service_account"])
+    # st.secrets["gcp_service_account"] is a TOML table (dict-like)
+    creds_info = dict(st.secrets["gcp_service_account"])
     creds = Credentials.from_service_account_info(
         creds_info,
         scopes=SCOPES,
