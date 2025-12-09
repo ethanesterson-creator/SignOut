@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime
 from pathlib import Path
 import pytz
+import json
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -55,9 +56,11 @@ EASTERN = pytz.timezone("US/Eastern")
 # -------------------------------------------------
 
 def get_sheet():
-    """Authorize and return the Google Sheets worksheet."""
-    creds = Credentials.from_service_account_file(
-        "credentials.json",
+    """Authorize and return the Google Sheets worksheet, using Streamlit secrets."""
+    # st.secrets["gcp_service_account"] is a JSON string we stored in the secrets UI
+    creds_info = json.loads(st.secrets["gcp_service_account"])
+    creds = Credentials.from_service_account_info(
+        creds_info,
         scopes=SCOPES,
     )
     client = gspread.authorize(creds)
@@ -168,7 +171,7 @@ def format_time(dt):
     if pd.isna(dt):
         return ""
     try:
-        # Already in Eastern as stored
+        # Already stored as Eastern time in ISO
         return dt.strftime("%Y-%m-%d %I:%M %p")
     except Exception:
         return str(dt)
