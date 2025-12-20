@@ -1,651 +1,481 @@
+
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+from pathlib import Path
 import pytz
 
 import gspread
 from gspread.exceptions import APIError, GSpreadException
 from google.oauth2.service_account import Credentials
 
-# -------------------------------------------------
+# =================================================
 # CONFIG
-# -------------------------------------------------
+# =================================================
+EASTERN = pytz.timezone("America/New_York")
 
-# Defaults (can be overridden by Streamlit Secrets if present)
-DEFAULT_SHEET_NAME = "logs"
-DEFAULT_STAFF_SHEET_NAME = "staff"
-DEFAULT_VANS_SHEET_NAME = "vans"
+# Sheet names (override via Streamlit secrets if you want)
+SPREADSHEET_ID = st.secrets.get("SPREADSHEET_ID", "1oS7KMged-KMGkeT9BHq1He8_K1oXMNuCvWQig21S5Xg")
+LOG_SHEET_NAME = st.secrets.get("SHEET_NAME", "logs")
+STAFF_SHEET_NAME = st.secrets.get("STAFF_SHEET_NAME", "staff")
+VANS_SHEET_NAME = st.secrets.get("VANS_SHEET_NAME", "vans")
 
-# Admin password can stay in secrets; fallback to this only if you really want.
-DEFAULT_ADMIN_PASSWORD = "Hyaffa26"
-
-EASTERN = pytz.timezone("US/Eastern")
-
-REASONS = [
-    "Day Off",
-    "Period Off",
-    "Night Off",
-    "Other (type reason)",
-]
+# Admin password (optional). If not set, Admin tab will still render but won't unlock.
+ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "")
 
 VANS = ["Van 1", "Van 2", "Van 3"]
-VAN_PURPOSES = [
-    "Airport/Bus",
-    "Medical/Pharmacy",
-    "Supplies/Errand",
-    "Trip Support",
-    "Other (type purpose)",
-]
 
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-]
+PEOPLE_REASONS = ["Period Off", "Night Off", "Day Off", "Medical", "Program", "Other"]
+VAN_PURPOSES = ["Period Off", "Night Off", "Day Off", "Other"]
 
-# -------------------------------------------------
-# SECRETS / SETTINGS
-# -------------------------------------------------
+LOG_HEADERS = ["id", "timestamp", "name", "reason", "other_reason", "action", "status"]
+VAN_HEADERS = ["id", "timestamp", "van", "driver", "purpose", "other_reason", "action", "passengers"]
 
-def get_setting(key: str, default=None):
-    # st.secrets behaves like a dict; using get keeps local dev easy.
-    try:
-        return st.secrets.get(key, default)
-    except Exception:
-        return default
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-SPREADSHEET_ID = get_setting("SPREADSHEET_ID", None)
-SHEET_NAME = get_setting("SHEET_NAME", DEFAULT_SHEET_NAME)
-STAFF_SHEET_NAME = get_setting("STAFF_SHEET_NAME", DEFAULT_STAFF_SHEET_NAME)
-VANS_SHEET_NAME = get_setting("VANS_SHEET_NAME", DEFAULT_VANS_SHEET_NAME)
-ADMIN_PASSWORD = get_setting("ADMIN_PASSWORD", DEFAULT_ADMIN_PASSWORD)
 
-# -------------------------------------------------
-# GOOGLE SHEETS HELPERS
-# -------------------------------------------------
+# =================================================
+# HELPERS
+# =================================================
+def normalize_pin(pin) -> str:
+    """Normalize 4-digit codes as strings. Preserves leading zeros by zfill."""
+    if pin is None:
+        return ""
+    s = str(pin).strip()
+    # If it came in as "123.0" from sheets, fix it.
+    if re.fullmatch(r"\d+\.0", s):
+        s = s[:-2]
+    # Keep digits only
+    s = "".join(ch for ch in s if ch.isdigit())
+    if not s:
+        return ""
+    return s.zfill(4)
 
-@st.cache_resource(show_spinner=False)
-def get_gspread_client():
-    """Create and cache the gspread client using Streamlit secrets."""
-    try:
-        creds_dict = st.secrets["gcp_service_account"]
-    except Exception:
-        st.error("Missing Google service account credentials. Add 'gcp_service_account' to Streamlit Secrets.")
+
+@st.cache_resource
+def _gspread_client():
+    creds_info = st.secrets.get("gcp_service_account")
+    if not creds_info:
+        st.error("Missing Google service account credentials in Streamlit secrets: gcp_service_account")
         st.stop()
-
-    creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+    creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
     return gspread.authorize(creds)
 
-def get_spreadsheet():
-    if not SPREADSHEET_ID:
-        st.error("Missing SPREADSHEET_ID. Add it to Streamlit Secrets.")
-        st.stop()
-    client = get_gspread_client()
+
+def get_worksheet(ws_name: str):
+    client = _gspread_client()
     try:
-        return client.open_by_key(SPREADSHEET_ID)
+        sh = client.open_by_key(SPREADSHEET_ID)
     except Exception:
         st.error("Could not open the Google Spreadsheet. Check SPREADSHEET_ID and sharing permissions.")
         st.stop()
 
-def get_or_create_worksheet(ws_name: str, headers: list[str]):
-    ss = get_spreadsheet()
     try:
-        ws = ss.worksheet(ws_name)
+        return sh.worksheet(ws_name)
     except Exception:
-        # Create worksheet if missing
-        try:
-            ws = ss.add_worksheet(title=ws_name, rows=1000, cols=max(10, len(headers)))
-        except Exception:
-            st.error(f"Could not find or create worksheet '{ws_name}'.")
-            st.stop()
-
-    ensure_header(ws, headers)
-    return ws
-
-def ensure_header(ws, expected_headers: list[str]):
-    """Ensure the first row is the expected header row."""
-    try:
-        first = ws.row_values(1)
-    except Exception:
-        first = []
-
-    if [h.strip() for h in first] != expected_headers:
-        # If sheet is empty, write header
-        if len(first) == 0:
-            ws.append_row(expected_headers)
-        else:
-            # Don't overwrite a non-empty sheet silently
-            # (This protects your existing logger integration)
-            missing = [h for h in expected_headers if h not in first]
-            if missing:
-                st.error(
-                    f"Worksheet '{ws.title}' header doesn't match expected columns. "
-                    f"Missing columns: {missing}. Please fix the header row."
-                )
+        # If missing (only for vans), create it
+        if ws_name == VANS_SHEET_NAME:
+            try:
+                ws = sh.add_worksheet(title=ws_name, rows=2000, cols=20)
+                ws.append_row(VAN_HEADERS)
+                return ws
+            except Exception:
+                st.error("Could not create the vans worksheet. Check spreadsheet permissions.")
                 st.stop()
-
-# -------------------------------------------------
-# DATA LOADERS
-# -------------------------------------------------
-
-def empty_logs_df():
-    return pd.DataFrame(columns=["id", "timestamp", "name", "reason", "other_reason", "action", "status"])
-
-def empty_vans_df():
-    return pd.DataFrame(columns=[
-        "id", "timestamp", "van", "driver", "destination", "purpose",
-        "passengers", "expected_return", "notes", "action", "status"
-    ])
-
-@st.cache_data(ttl=30, show_spinner=False)
-def load_staff_pins() -> dict[str, str]:
-    """Load active staff and their 4-digit PINs from the STAFF worksheet."""
-    ss = get_spreadsheet()
-    try:
-        ws = ss.worksheet(STAFF_SHEET_NAME)
-    except Exception:
-        st.error(f"Could not find a worksheet named '{STAFF_SHEET_NAME}'.")
+        st.error(f"Worksheet '{ws_name}' not found.")
         st.stop()
 
+
+def ensure_header(sheet, expected_headers):
     try:
-        records = ws.get_all_records()
-    except Exception:
-        st.error("Could not read the staff sheet.")
+        values = sheet.get_all_values()
+    except (APIError, GSpreadException):
+        st.error("Problem reading the Google Sheet.")
         st.stop()
 
+    if not values:
+        sheet.append_row(expected_headers)
+        return
+
+    header = values[0]
+    if header != expected_headers:
+        # Don't destroy existing data; just warn loudly.
+        st.warning(
+            f"Header mismatch in '{sheet.title}'. Expected {expected_headers} but found {header}. "
+            "The app may not behave correctly until this is fixed."
+        )
+
+
+@st.cache_data(ttl=30)
+def load_staff_df() -> pd.DataFrame:
+    sheet = get_worksheet(STAFF_SHEET_NAME)
+    records = sheet.get_all_records()
     df = pd.DataFrame(records)
-    if df.empty:
-        return {}
 
-    needed = {"name", "pin", "active"}
-    if not needed.issubset(set(df.columns)):
-        st.error(f"Staff sheet must have headers: name, pin, active (found: {list(df.columns)})")
-        st.stop()
+    if df.empty:
+        return pd.DataFrame(columns=["name", "pin", "active"])
+
+    # Normalize expected columns
+    for col in ["name", "pin", "active"]:
+        if col not in df.columns:
+            df[col] = ""
 
     df["name"] = df["name"].astype(str).str.strip()
-    df["pin"] = df["pin"].astype(str).str.strip()
+    df["pin"] = df["pin"].apply(normalize_pin)
 
-    # treat TRUE/true/Yes/1 as active
+    # Active parsing
     df["active"] = df["active"].astype(str).str.strip().str.lower().isin(["true", "yes", "1"])
-    df = df[df["active"]].copy()
+    df = df[df["active"]]
+    df = df[df["name"] != ""]
+    return df.sort_values("name")
 
-    pins = dict(zip(df["name"], df["pin"]))
-    return pins
 
-def load_logs_df():
-    """Load staff logs into a DataFrame (timestamp logic unchanged)."""
-    try:
-        ws = get_or_create_worksheet(
-            SHEET_NAME,
-            ["id", "timestamp", "name", "reason", "other_reason", "action", "status"],
-        )
-    except Exception:
-        return empty_logs_df()
+def staff_pin_map() -> dict:
+    df = load_staff_df()
+    return dict(zip(df["name"], df["pin"]))
 
-    try:
-        records = ws.get_all_records()
-    except GSpreadException:
-        st.error("Problem reading the sign-out log from Google Sheets. Please check the logs sheet header.")
-        return empty_logs_df()
 
+@st.cache_data(ttl=20)
+def load_logs_df() -> pd.DataFrame:
+    sheet = get_worksheet(LOG_SHEET_NAME)
+    ensure_header(sheet, LOG_HEADERS)
+    records = sheet.get_all_records()
     df = pd.DataFrame(records)
     if df.empty:
-        return empty_logs_df()
+        return pd.DataFrame(columns=LOG_HEADERS)
 
-    if "id" in df.columns:
-        df["id"] = pd.to_numeric(df["id"], errors="coerce").astype("Int64")
-    else:
-        df["id"] = pd.Series(dtype="Int64")
-
-    if "timestamp" in df.columns:
+    # parse timestamp
+    try:
         df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-    else:
+    except Exception:
         df["timestamp"] = pd.NaT
-
     return df
 
-def load_vans_df():
-    """Load van logs into a DataFrame."""
-    ws = get_or_create_worksheet(
-        VANS_SHEET_NAME,
-        ["id", "timestamp", "van", "driver", "destination", "purpose",
-         "passengers", "expected_return", "notes", "action", "status"],
-    )
 
-    try:
-        records = ws.get_all_records()
-    except GSpreadException:
-        st.error("Problem reading the vans sheet. Please check the vans sheet header.")
-        return empty_vans_df()
+def append_people_log(name: str, reason: str, other_reason: str, action: str, status: str):
+    sheet = get_worksheet(LOG_SHEET_NAME)
+    ensure_header(sheet, LOG_HEADERS)
 
+    df = load_logs_df()
+    next_id = 1 if df.empty or df["id"].isna().all() else int(pd.to_numeric(df["id"], errors="coerce").max()) + 1
+
+    now = datetime.now(EASTERN)
+    timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    row = [next_id, timestamp_str, name, reason, other_reason, action, status]
+    sheet.append_row(row, value_input_option="USER_ENTERED")
+    # bust cache
+    load_logs_df.clear()
+
+
+@st.cache_data(ttl=20)
+def load_vans_df() -> pd.DataFrame:
+    sheet = get_worksheet(VANS_SHEET_NAME)
+    ensure_header(sheet, VAN_HEADERS)
+    records = sheet.get_all_records()
     df = pd.DataFrame(records)
     if df.empty:
-        return empty_vans_df()
+        return pd.DataFrame(columns=VAN_HEADERS)
 
-    if "id" in df.columns:
-        df["id"] = pd.to_numeric(df["id"], errors="coerce").astype("Int64")
-    else:
-        df["id"] = pd.Series(dtype="Int64")
-
-    if "timestamp" in df.columns:
+    try:
         df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-    else:
+    except Exception:
         df["timestamp"] = pd.NaT
-
     return df
 
-# -------------------------------------------------
-# BUSINESS LOGIC
-# -------------------------------------------------
 
-def format_time(ts):
-    if pd.isna(ts):
-        return ""
-    try:
-        # keep it simple, camp-friendly
-        return ts.tz_localize("UTC").tz_convert(EASTERN).strftime("%a %I:%M %p")
-    except Exception:
-        try:
-            return ts.strftime("%a %I:%M %p")
-        except Exception:
-            return str(ts)
+def append_van_log(van: str, driver: str, purpose: str, other_reason: str, action: str, passengers: list[str]):
+    sheet = get_worksheet(VANS_SHEET_NAME)
+    ensure_header(sheet, VAN_HEADERS)
 
-def get_currently_out(df: pd.DataFrame) -> pd.DataFrame:
-    """Return a dataframe of people whose latest status is OUT (timestamp logic unchanged)."""
-    if df.empty:
-        return pd.DataFrame(columns=["name", "reason", "other_reason", "timestamp"])
+    df = load_vans_df()
+    next_id = 1 if df.empty or df["id"].isna().all() else int(pd.to_numeric(df["id"], errors="coerce").max()) + 1
 
-    df_sorted = df.sort_values("timestamp")
-    last_actions = df_sorted.groupby("name").tail(1)
-    out_rows = last_actions[last_actions["status"] == "OUT"].copy()
+    now = datetime.now(EASTERN)
+    timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
 
-    if out_rows.empty:
-        return pd.DataFrame(columns=["name", "reason", "other_reason", "timestamp"])
+    passengers_str = ", ".join(passengers) if passengers else ""
+    row = [next_id, timestamp_str, van, driver, purpose, other_reason, action, passengers_str]
+    sheet.append_row(row, value_input_option="USER_ENTERED")
+    load_vans_df.clear()
 
-    return out_rows[["name", "reason", "other_reason", "timestamp"]]
 
-def get_vans_out(df: pd.DataFrame) -> pd.DataFrame:
-    """Return vans whose latest status is OUT."""
-    if df.empty:
-        return pd.DataFrame(columns=["van", "driver", "purpose", "timestamp", "passengers"])
-
-    df_sorted = df.sort_values("timestamp")
-    last_actions = df_sorted.groupby("van").tail(1)
-    out_rows = last_actions[last_actions["status"] == "OUT"].copy()
-
-    if out_rows.empty:
-        return pd.DataFrame(columns=["van", "driver", "purpose", "timestamp", "passengers"])
-
-    keep = ["van", "driver", "purpose", "other_purpose", "passengers", "timestamp"]
-    keep = [c for c in keep if c in out_rows.columns]
-    understand = out_rows[keep].copy()
-    return understand
-
-def append_staff_log(name: str, reason: str, other_reason: str, action: str, status: str):
-    try:
-        ws = get_or_create_worksheet(
-            SHEET_NAME,
-            ["id", "timestamp", "name", "reason", "other_reason", "action", "status"],
-        )
-        df = load_logs_df()
-        next_id = 1 if df.empty or df["id"].isna().all() else int(df["id"].max()) + 1
-
-        now = datetime.now(EASTERN)
-        timestamp_str = now.isoformat()
-
-        row = [next_id, timestamp_str, name, reason, other_reason, action, status]
-        ws.append_row(row)
-    except (APIError, GSpreadException):
-        st.error("Could not record this sign-in/sign-out due to a problem talking to Google Sheets.")
-
-def append_van_log(
-    van: str,
-    driver: str,
-    purpose: str,
-    other_purpose: str,
-    passengers: str,
-    action: str,
-    status: str,
-):
-    """Append a van log row to the vans worksheet."""
-    try:
-        ws = get_or_create_worksheet(
-            VANS_SHEET_NAME,
-            ["id", "timestamp", "van", "driver", "purpose", "other_purpose", "passengers", "action", "status"],
-        )
-
-        df = load_vans_df()
-        next_id = 1 if df.empty or df["id"].isna().all() else int(df["id"].max()) + 1
-
-        now = datetime.now(EASTERN)
-        timestamp_str = now.isoformat()
-
-        row = [next_id, timestamp_str, van, driver, purpose, other_purpose, passengers, action, status]
-        ws.append_row(row)
-    except (APIError, GSpreadException):
-        st.error("Could not record this van log due to a problem talking to Google Sheets.")
-
-def page_sign_in_out():
-    st.header("Staff Sign In / Out")
-
-    staff_pins = load_staff_pins()
-    staff_names = sorted(staff_pins.keys())
-
-    if not staff_names:
-        st.warning("No active staff found in the staff sheet.")
-        return
-
-    st.caption("Use your 4-digit code. This logs to the main camp sign-out sheet.")
-
-    # --- Sign Out Section ---
-    st.subheader("Sign Out")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        name = st.selectbox("Your name", [""] + staff_names, index=0, key="signout_name")
-    with col2:
-        reason = st.selectbox("Reason for going out", REASONS, key="signout_reason")
-
-    other_reason = ""
-    if reason == "Other (type reason)":
-        other_reason = st.text_input("Type your reason", key="signout_other_reason")
-
-    pin = st.text_input("Enter your 4-digit code", type="password", max_chars=4, key="signout_pin")
-
-    if st.button("Sign Out", key="signout_btn"):
-        if not name:
-            st.warning("Select your name.")
-            return
-        if name not in staff_pins:
-            st.error("Name not recognized. Check the staff sheet.")
-            return
-        if staff_pins[name] != str(pin).strip():
-            st.error("Incorrect code.")
-            return
-
-        append_staff_log(name, reason, other_reason, action="SIGN_OUT", status="OUT")
-        st.success(f"{name} signed out.")
-        st.cache_data.clear()
-
-    st.divider()
-
-    # --- Sign In Section ---
-    st.subheader("Sign In")
-
-    name_in = st.selectbox("Your name ", [""] + staff_names, index=0, key="signin_name")
-    pin_in = st.text_input("Enter your 4-digit code ", type="password", max_chars=4, key="signin_pin")
-
-    if st.button("Sign In", key="signin_btn"):
-        if not name_in:
-            st.warning("Select your name.")
-            return
-        if staff_pins.get(name_in) != str(pin_in).strip():
-            st.error("Incorrect code.")
-            return
-
-        append_staff_log(name_in, reason="", other_reason="", action="SIGN_IN", status="IN")
-        st.success(f"{name_in} signed in.")
-        st.cache_data.clear()
-
-def page_whos_out():
-    st.header("Who’s Out Right Now?")
-
-    df_logs = load_logs_df()
-    df_out = get_currently_out(df_logs)
-
-    if df_out.empty:
-        st.info("No staff are currently out.")
-        return
-
-    df_display = df_out.copy()
-    df_display["When"] = df_display["timestamp"].apply(format_time)
-    df_display = df_display.rename(columns={
-        "name": "Name",
-        "reason": "Reason",
-        "other_reason": "Other Reason",
-    })
-    cols = ["Name", "Reason", "Other Reason", "When"]
-    cols = [c for c in cols if c in df_display.columns]
-    st.dataframe(df_display[cols], use_container_width=True)
-
-def page_vans():
-    st.header("Van Sign Out")
-
-    staff_pins = load_staff_pins()
-    staff_names = sorted(staff_pins.keys())
-
-    if not staff_names:
-        st.warning("No active staff found in the staff sheet.")
-        return
-
-    st.caption("Driver + every passenger must enter their own 4-digit code.")
-
-    # Load van logs and compute current status
-    df_vans = load_vans_df()
-    df_vans_out = get_vans_out(df_vans)
-
-    st.subheader("Vans Out Right Now")
-    if df_vans_out.empty:
-        st.info("All vans are currently in.")
-        vans_out_set = set()
-    else:
-        df_disp = df_vans_out.copy()
-        df_disp["When"] = df_disp["timestamp"].apply(format_time)
-        # Make purpose display nice
-        if "other_purpose" in df_disp.columns:
-            df_disp["Purpose"] = df_disp.apply(
-                lambda r: r["purpose"] if str(r.get("purpose", "")).strip().lower() != "other" else f'Other: {r.get("other_purpose", "")}',
-                axis=1,
-            )
-        else:
-            df_disp["Purpose"] = df_disp.get("purpose", "")
-
-        rename = {
-            "van": "Van",
-            "driver": "Driver",
-            "passengers": "Passengers",
-        }
-        df_disp = df_disp.rename(columns=rename)
-        show_cols = [c for c in ["Van", "Driver", "Passengers", "Purpose", "When"] if c in df_disp.columns]
-        st.dataframe(df_disp[show_cols], use_container_width=True)
-
-        vans_out_set = set(df_vans_out["van"].astype(str).tolist())
-
-    st.divider()
-
-    VANS = ["Van 1", "Van 2", "Van 3"]
-    van = st.selectbox("Select a van", VANS, key="van_select")
-
-    is_out = van in vans_out_set
-
-    # -------------------------------
-    # CHECK OUT (Sign Out) - only when van is IN
-    # -------------------------------
-    st.subheader("Check Out a Van")
-
-    if is_out:
-        st.info(f"{van} is currently OUT. Use the Return section below to sign it back in.")
-    else:
-        col1, col2 = st.columns(2)
-        with col1:
-            driver = st.selectbox("Driver", [""] + staff_names, index=0, key="van_driver")
-        with col2:
-            driver_pin = st.text_input("Driver 4-digit code", type="password", max_chars=4, key="van_driver_pin")
-
-        purpose_choice = st.selectbox(
-            "Purpose",
-            ["Period Off", "Night Off", "Day Off", "Other"],
-            key="van_purpose",
-        )
-        other_purpose = ""
-        if purpose_choice == "Other":
-            other_purpose = st.text_input("Other purpose (required)", key="van_other_purpose")
-
-        st.markdown("**Passengers (each must enter their code)**")
-
-        passenger_names = [n for n in staff_names if n != driver]
-        passengers_selected = st.multiselect(
-            "Add passengers",
-            passenger_names,
-            key="van_passengers",
-        )
-
-        passenger_pins = {}
-        if passengers_selected:
-            for pname in passengers_selected:
-                passenger_pins[pname] = st.text_input(
-                    f"{pname} 4-digit code",
-                    type="password",
-                    max_chars=4,
-                    key=f"van_pin_{pname}",
-                )
-
-        if st.button("Sign Out Van", key="van_checkout_btn"):
-            # Validate driver
-            if not driver:
-                st.warning("Select a driver.")
-                return
-            if staff_pins.get(driver) != str(driver_pin).strip():
-                st.error("Incorrect driver code.")
-                return
-
-            # Validate passengers (each must enter correct code)
-            for pname in passengers_selected:
-                if staff_pins.get(pname) != str(passenger_pins.get(pname, "")).strip():
-                    st.error(f"Incorrect code for {pname}.")
-                    return
-
-            # Validate purpose
-            if purpose_choice == "Other" and not other_purpose.strip():
-                st.warning("Please enter the other purpose.")
-                return
-
-            passengers_str = ", ".join(passengers_selected) if passengers_selected else ""
-
-            append_van_log(
-                van=van,
-                driver=driver,
-                purpose=purpose_choice,
-                other_purpose=other_purpose.strip(),
-                passengers=passengers_str,
-                action="CHECKOUT",
-                status="OUT",
-            )
-            st.success(f"{van} signed out under {driver}.")
-
-            st.cache_data.clear()
-            st.rerun()
-
-    st.divider()
-
-    # -------------------------------
-    # RETURN (Sign In) - only when van is OUT
-    # -------------------------------
-    st.subheader("Return a Van")
-
-    if not is_out:
-        st.info(f"{van} is currently IN. Return is only available when the van is out.")
-        return_driver = st.selectbox("Driver returning the van", [""] + staff_names, index=0, key="van_return_driver_disabled")
-        st.text_input("Driver 4-digit code", type="password", max_chars=4, key="van_return_driver_pin_disabled")
-        st.button("Sign In Van", key="van_return_btn_disabled", disabled=True)
-        return
-
-    col1, col2 = st.columns(2)
-    with col1:
-        return_driver = st.selectbox("Driver returning the van", [""] + staff_names, index=0, key="van_return_driver")
-    with col2:
-        return_driver_pin = st.text_input("Driver 4-digit code", type="password", max_chars=4, key="van_return_driver_pin")
-
-    if st.button("Sign In Van", key="van_return_btn"):
-        if not return_driver:
-            st.warning("Select a driver.")
-            return
-        if staff_pins.get(return_driver) != str(return_driver_pin).strip():
-            st.error("Incorrect driver code.")
-            return
-
-        append_van_log(
-            van=van,
-            driver=return_driver,
-            purpose="",
-            other_purpose="",
-            passengers="",
-            action="RETURN",
-            status="IN",
-        )
-        st.success(f"{van} signed in (returned by {return_driver}).")
-
-        st.cache_data.clear()
-        st.rerun()
-
-def page_admin_history():
-    st.header("Admin / History")
-
-    if "admin_authenticated" not in st.session_state:
-        st.session_state.admin_authenticated = False
-
-    if not st.session_state.admin_authenticated:
-        password = st.text_input("Admin password", type="password", key="admin_pw")
-        if st.button("Unlock Admin Area", key="admin_unlock_btn"):
-            if password == ADMIN_PASSWORD:
-                st.session_state.admin_authenticated = True
-                st.success("Admin unlocked.")
-                st.rerun()
-            else:
-                st.error("Incorrect admin password.")
-        return
-
-    with st.expander("Admin Session", expanded=False):
-        st.caption("You are logged in to the admin area.")
-        if st.button("Lock Admin Area", key="admin_logout_btn"):
-            st.session_state.admin_authenticated = False
-            st.success("Admin area locked again.")
-            st.rerun()
-
-    st.subheader("Staff Log History")
-    df_logs = load_logs_df()
+def current_people_out(df_logs: pd.DataFrame) -> pd.DataFrame:
     if df_logs.empty:
-        st.info("No staff logs recorded yet.")
+        return df_logs
+
+    df = df_logs.copy()
+    if "timestamp" in df.columns:
+        df_sorted = df.sort_values("timestamp")
     else:
-        df_disp = df_logs.copy()
-        df_disp["When"] = df_disp["timestamp"].apply(format_time)
-        st.dataframe(df_disp.sort_values("timestamp", ascending=False), use_container_width=True)
+        df_sorted = df
+
+    last_actions = df_sorted.groupby("name", as_index=False).tail(1)
+    # Expect status column values like OUT/IN
+    out_now = last_actions[last_actions["status"].astype(str).str.upper() == "OUT"]
+    return out_now.sort_values("timestamp", ascending=False)
+
+
+def current_vans_status(df_vans: pd.DataFrame) -> dict:
+    """Return {van: 'OUT'/'IN'/None} based on last action for each van."""
+    status = {v: None for v in VANS}
+    if df_vans.empty:
+        return status
+
+    df = df_vans.copy()
+    if "timestamp" in df.columns:
+        df = df.sort_values("timestamp")
+    last = df.groupby("van", as_index=False).tail(1)
+    for _, row in last.iterrows():
+        v = str(row.get("van", "")).strip()
+        s = str(row.get("action", "")).strip().upper()
+        if v in status:
+            status[v] = "OUT" if s == "OUT" else "IN"
+    return status
+
+
+def first_available_van(van_status: dict) -> str | None:
+    for v in VANS:
+        if van_status.get(v) != "OUT":
+            return v
+    return None
+
+
+def render_logo():
+    logo_path = Path("logo-header-2.png")
+    if logo_path.exists():
+        st.image(str(logo_path), width=220)
+    else:
+        # Don't fail the app if the logo file isn't present
+        st.markdown("")
+
+
+# =================================================
+# UI
+# =================================================
+st.set_page_config(page_title="Bauercrest Sign Out", layout="centered")
+
+render_logo()
+st.title("Sign Out")
+
+tabs = st.tabs(["People", "Vans", "Admin"])
+
+
+# -------------------------
+# PEOPLE TAB
+# -------------------------
+with tabs[0]:
+    staff_df = load_staff_df()
+    pins = staff_pin_map()
+    staff_names = staff_df["name"].tolist()
+
+    st.subheader("Staff Sign Out / Sign In")
+
+    if not staff_names:
+        st.error("No active staff found in the staff sheet.")
+        st.stop()
+
+    # Show who's out (unchanged timestamp logic)
+    df_logs = load_logs_df()
+    out_now = current_people_out(df_logs)
+
+    st.markdown("#### Who’s Out Right Now")
+    if out_now.empty:
+        st.info("No one is currently signed out.")
+    else:
+        show = out_now[["name", "reason", "other_reason", "timestamp"]].copy()
+        show["timestamp"] = show["timestamp"].astype(str)
+        st.dataframe(show, use_container_width=True, hide_index=True)
 
     st.divider()
 
-    st.subheader("Van Log History")
+    col1, col2 = st.columns(2)
+    with col1:
+        name = st.selectbox("Name", staff_names, key="people_name")
+    with col2:
+        pin = st.text_input("4-digit code", type="password", key="people_pin")
+
+    reason = st.selectbox("Reason", PEOPLE_REASONS, key="people_reason")
+    other_reason = ""
+    if reason == "Other":
+        other_reason = st.text_input("If Other, write reason", key="people_other_reason")
+
+    # Determine current status
+    current_status = "IN"
+    if not out_now.empty and name in out_now["name"].values:
+        current_status = "OUT"
+
+    action_label = "Sign Out" if current_status == "IN" else "Sign In"
+
+    if st.button(action_label, type="primary", key="people_submit"):
+        pin_norm = normalize_pin(pin)
+        expected = pins.get(name, "")
+        if not expected:
+            st.error("Name not recognized. Check the staff sheet.")
+        elif pin_norm != expected:
+            st.error("Wrong code entered.")
+        else:
+            if current_status == "IN":
+                append_people_log(name=name, reason=reason, other_reason=other_reason, action="OUT", status="OUT")
+                st.success(f"{name} successfully signed out.")
+            else:
+                append_people_log(name=name, reason="", other_reason="", action="IN", status="IN")
+                st.success(f"{name} successfully signed in.")
+
+
+# -------------------------
+# VANS TAB
+# -------------------------
+with tabs[1]:
+    st.subheader("Van Sign Out")
+
+    staff_df = load_staff_df()
+    pins = staff_pin_map()
+    staff_names = staff_df["name"].tolist()
+
     df_vans = load_vans_df()
-    if df_vans.empty:
-        st.info("No van logs recorded yet.")
+    van_status = current_vans_status(df_vans)
+    out_vans = [v for v, s in van_status.items() if s == "OUT"]
+    available_van = first_available_van(van_status)
+
+    st.markdown("#### Vans Out Right Now")
+    if not out_vans:
+        st.info("No vans are currently signed out.")
     else:
-        df_disp = df_vans.copy()
-        df_disp["When"] = df_disp["timestamp"].apply(format_time)
-        st.dataframe(df_disp.sort_values("timestamp", ascending=False), use_container_width=True)
+        # show the most recent OUT row per van
+        df = df_vans.copy()
+        df = df.sort_values("timestamp")
+        last = df.groupby("van", as_index=False).tail(1)
+        last_out = last[last["action"].astype(str).str.upper() == "OUT"]
+        if last_out.empty:
+            st.info("No vans are currently signed out.")
+        else:
+            show = last_out[["van", "driver", "purpose", "other_reason", "passengers", "timestamp"]].copy()
+            show["timestamp"] = show["timestamp"].astype(str)
+            st.dataframe(show, use_container_width=True, hide_index=True)
 
-# -------------------------------------------------
-# MAIN
-# -------------------------------------------------
+    st.divider()
 
-def main():
-    st.set_page_config(page_title="Bauercrest Sign Out", layout="wide")
-    st.image("logo-header-2.png", width=220)
+    # --- SIGN OUT SECTION (no van selection; auto-assign)
+    st.markdown("### Sign Out a Van")
+    if available_van is None:
+        st.warning("All vans are currently signed out. Please sign one back in before signing out another.")
+    else:
+        st.caption(f"Next available: **{available_van}** (auto-assigned)")
+
+        with st.form("van_sign_out_form", clear_on_submit=False):
+            driver = st.selectbox("Driver", staff_names, key="van_driver")
+            driver_pin = st.text_input("Driver 4-digit code", type="password", key="van_driver_pin")
+
+            purpose = st.selectbox("Purpose", VAN_PURPOSES, key="van_purpose")
+            other = ""
+            if purpose == "Other":
+                other = st.text_input("If Other, write purpose", key="van_other_purpose")
+
+            st.markdown("**Passengers** (each passenger must enter their own code)")
+            passenger_count = st.number_input("Number of passengers (not including driver)", min_value=0, max_value=12, value=0, step=1)
+
+            passengers = []
+            passenger_pins = []
+            used_names = {driver}
+
+            for i in range(int(passenger_count)):
+                c1, c2 = st.columns([2, 1])
+                with c1:
+                    # filter out already used
+                    options = [n for n in staff_names if n not in used_names]
+                    p_name = st.selectbox(f"Passenger {i+1}", options, key=f"p_name_{i}")
+                with c2:
+                    p_pin = st.text_input(f"Code {i+1}", type="password", key=f"p_pin_{i}")
+                used_names.add(p_name)
+                passengers.append(p_name)
+                passenger_pins.append(p_pin)
+
+            submit = st.form_submit_button("Sign Out Van", type="primary")
+
+        if submit:
+            # Validate driver
+            if normalize_pin(driver_pin) != pins.get(driver, ""):
+                st.error("Wrong driver code entered.")
+            else:
+                # Validate passengers
+                bad = []
+                for p_name, p_pin in zip(passengers, passenger_pins):
+                    if normalize_pin(p_pin) != pins.get(p_name, ""):
+                        bad.append(p_name)
+
+                if bad:
+                    st.error("Wrong code entered for: " + ", ".join(bad))
+                else:
+                    if purpose == "Other" and not other.strip():
+                        st.error("Please write the purpose for Other.")
+                    else:
+                        append_van_log(
+                            van=available_van,
+                            driver=driver,
+                            purpose=purpose,
+                            other_reason=other.strip(),
+                            action="OUT",
+                            passengers=passengers,
+                        )
+                        st.success(f"{available_van} successfully signed out under {driver}.")
+
+    # --- SIGN IN SECTION (only appears when at least one van out)
+    if out_vans:
+        st.divider()
+        st.markdown("### Sign In a Van")
+
+        # No initial van dropdown; render one card/button per out van.
+        df = df_vans.copy().sort_values("timestamp")
+        last = df.groupby("van", as_index=False).tail(1)
+        last_out = last[last["action"].astype(str).str.upper() == "OUT"].set_index("van")
+
+        for v in out_vans:
+            info = last_out.loc[v] if v in last_out.index else None
+            label = v
+            if info is not None:
+                label = f"{v} (out under {info.get('driver','')})"
+
+            with st.expander(label, expanded=True):
+                returning_driver = st.selectbox("Returning driver", staff_names, key=f"ret_driver_{v}")
+                returning_pin = st.text_input("Returning driver 4-digit code", type="password", key=f"ret_pin_{v}")
+
+                if st.button(f"Sign In {v}", key=f"sign_in_btn_{v}"):
+                    if normalize_pin(returning_pin) != pins.get(returning_driver, ""):
+                        st.error("Wrong code entered.")
+                    else:
+                        append_van_log(
+                            van=v,
+                            driver=returning_driver,
+                            purpose="",
+                            other_reason="",
+                            action="IN",
+                            passengers=[],
+                        )
+                        st.success(f"{v} successfully signed in.")
 
 
-    st.title("Camp Bauercrest Sign Out")
+# -------------------------
+# ADMIN TAB
+# -------------------------
+with tabs[2]:
+    st.subheader("Admin")
 
-    page = st.sidebar.radio(
-        "Navigation",
-        ["Sign In / Out", "Who’s Out", "Vans", "Admin / History"],
-        key="main_page_radio",
-    )
+    if not ADMIN_PASSWORD:
+        st.info("Admin password not configured. Add ADMIN_PASSWORD in Streamlit secrets to enable admin actions.")
+    else:
+        admin_pw = st.text_input("Admin password", type="password")
+        if admin_pw != ADMIN_PASSWORD:
+            st.warning("Enter admin password to view admin tools.")
+        else:
+            st.success("Admin unlocked.")
 
-    if page == "Sign In / Out":
-        page_sign_in_out()
-    elif page == "Who’s Out":
-        page_whos_out()
-    elif page == "Vans":
-        page_vans()
-    elif page == "Admin / History":
-        page_admin_history()
+            st.markdown("### View People Logs")
+            df_logs = load_logs_df()
+            st.dataframe(df_logs.sort_values("timestamp", ascending=False), use_container_width=True, hide_index=True)
 
+            st.markdown("### View Van Logs")
+            df_vans = load_vans_df()
+            st.dataframe(df_vans.sort_values("timestamp", ascending=False), use_container_width=True, hide_index=True)
 
-if __name__ == "__main__":
-    main()
+            st.caption("Tip: If you edit the staff sheet, changes may take up to ~30 seconds to reflect here due to caching.")
