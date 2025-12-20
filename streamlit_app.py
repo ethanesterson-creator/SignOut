@@ -626,7 +626,7 @@ def page_admin_history():
 
 def main():
     st.set_page_config(page_title="Bauercrest Sign Out", layout="wide")
-    st.image("logo-header-2.png", use_container_width=True)
+    st.image("logo-header-2.png", width=220)
 
 
     st.title("Camp Bauercrest Sign Out")
