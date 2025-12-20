@@ -12,33 +12,17 @@ from google.oauth2.service_account import Credentials
 # CONFIG
 # -------------------------------------------------
 
-SPREADSHEET_ID = "1oS7KMged-KMGkeT9BHq1He8_K1oXMNuCvWQig21S5Xg"
-SHEET_NAME = "logs"
+SPREADSHEET_ID = st.secrets.get("SPREADSHEET_ID", "1oS7KMged-KMGkeT9BHq1He8_K1oXMNuCvWQig21S5Xg")
+SHEET_NAME = st.secrets.get("SHEET_NAME", "logs")
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-# Staff list and PINs (4-digit codes)
-STAFF_PINS = {
-    "Jaden Pollack": "1723",
-    "Ethan Goldberg": "3841",
-    "Colby Karp": "5927",
-    "Jordan Bornstein": "4068",
-    "Dylan Israel": "8315",
-    "Zach Baum": "2194",
-    "Darren Sands": "6450",
-    "Ethan Esterson": "9032",
-    "Asher Schiillin": "5179",
-    "Brody Masters": "7624",
-    "Matt Schultz": "4482",
-    "Max Pollack": "3901",
-    "Will Carp": "6842",
-    "Josh Poscover": "5589",
-    "Evan Ashe": "7136",
-    "Riley Schneller": "8240",
-    "Joey Rosenfeld": "9675",
-    "Justin Feldman": "1358",
-}
-STAFF_NAMES = list(STAFF_PINS.keys())
+
+# Staff list is loaded from a worksheet in the same spreadsheet
+STAFF_SHEET_NAME = st.secrets.get("STAFF_SHEET_NAME", "staff")
+def get_staff_names(staff_pins: dict) -> list:
+    return sorted(list(staff_pins.keys()))
+
 
 REASONS = [
     "Day Off",
@@ -47,7 +31,7 @@ REASONS = [
     "Other (type reason)",
 ]
 
-ADMIN_PASSWORD = "Hyaffa26"
+ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "Hyaffa26")
 EASTERN = pytz.timezone("US/Eastern")
 
 
@@ -55,15 +39,15 @@ EASTERN = pytz.timezone("US/Eastern")
 # GOOGLE SHEETS HELPERS
 # -------------------------------------------------
 
-def get_sheet():
-    """Authorize and return the Google Sheets worksheet, using Streamlit secrets."""
+def get_sheet(sheet_name: str = SHEET_NAME):
+    """Authorize and return a Google Sheets worksheet by name, using Streamlit secrets."""
     creds_info = dict(st.secrets["gcp_service_account"])
     creds = Credentials.from_service_account_info(
         creds_info,
         scopes=SCOPES,
     )
     client = gspread.authorize(creds)
-    sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
+    sheet = client.open_by_key(SPREADSHEET_ID).worksheet(sheet_name)
     return sheet
 
 
@@ -79,6 +63,48 @@ def ensure_header(sheet):
     if not values:
         header = ["id", "timestamp", "name", "reason", "other_reason", "action", "status"]
         sheet.append_row(header)
+
+
+
+@st.cache_data(ttl=60)
+def load_staff_pins() -> dict:
+    """Load active staff PINs from the staff worksheet.
+
+    Expected columns in the staff tab:
+      - name
+      - pin
+      - active (TRUE/FALSE)
+
+    Returns:
+      dict: {name: pin_as_string}
+    """
+    try:
+        staff_ws = get_sheet(STAFF_SHEET_NAME)
+        records = staff_ws.get_all_records()
+        df = pd.DataFrame(records)
+
+        if df.empty:
+            return {}
+
+        # Normalize columns
+        df.columns = [str(c).strip().lower() for c in df.columns]
+        if "name" not in df.columns or "pin" not in df.columns:
+            return {}
+
+        df["name"] = df["name"].astype(str).str.strip()
+        df["pin"] = df["pin"].astype(str).str.strip()
+
+        if "active" in df.columns:
+            active = df["active"].astype(str).str.strip().str.lower()
+            df = df[active.isin(["true", "yes", "y", "1"])]
+
+        # Drop blanks
+        df = df[(df["name"] != "") & (df["pin"] != "")]
+
+        return dict(zip(df["name"], df["pin"]))
+    except Exception:
+        # Keep this quiet-ish so the UI can show a helpful message where needed
+        return {}
 
 
 def empty_logs_df():
@@ -226,6 +252,12 @@ def format_time(dt):
 def page_sign_in_out():
     st.header("Staff Sign-Out / Sign-In")
 
+    staff_pins = load_staff_pins()
+    if not staff_pins:
+        st.error("Staff list could not be loaded from the staff sheet. Check the tab name and columns: name, pin, active.")
+        st.stop()
+    staff_names = get_staff_names(staff_pins)
+
     df_logs = load_logs_df()
     df_out = get_currently_out(df_logs)
 
@@ -235,7 +267,7 @@ def page_sign_in_out():
     col1, col2 = st.columns(2)
 
     with col1:
-        name = st.selectbox("Your name", [""] + STAFF_NAMES, index=0, key="signout_name")
+        name = st.selectbox("Your name", [""] + staff_names, index=0, key="signout_name")
     with col2:
         reason = st.selectbox("Reason for going out", REASONS, key="signout_reason")
 
@@ -254,9 +286,9 @@ def page_sign_in_out():
     if st.button("Sign Out", key="signout_button"):
         if not name:
             st.error("Please select your name.")
-        elif name not in STAFF_PINS:
+        elif name not in staff_pins:
             st.error("Name not recognized in staff list.")
-        elif STAFF_PINS[name] != pin:
+        elif staff_pins[name] != pin:
             st.error("Incorrect code.")
         elif reason == "Other (type reason)" and not other_reason.strip():
             st.error("Please type a reason for 'Other'.")
@@ -289,9 +321,9 @@ def page_sign_in_out():
         if st.button("Sign In", key="signin_button"):
             if not name_in:
                 st.error("Please select your name.")
-            elif name_in not in STAFF_PINS:
+            elif name_in not in staff_pins:
                 st.error("Name not recognized in staff list.")
-            elif STAFF_PINS[name_in] != pin_in:
+            elif staff_pins[name_in] != pin_in:
                 st.error("Incorrect code.")
             else:
                 row = df_out[df_out["name"] == name_in].iloc[0]
