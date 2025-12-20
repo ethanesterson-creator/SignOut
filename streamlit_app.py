@@ -265,18 +265,19 @@ def get_currently_out(df: pd.DataFrame) -> pd.DataFrame:
 def get_vans_out(df: pd.DataFrame) -> pd.DataFrame:
     """Return vans whose latest status is OUT."""
     if df.empty:
-        return pd.DataFrame(columns=["van", "driver", "destination", "purpose", "timestamp"])
+        return pd.DataFrame(columns=["van", "driver", "purpose", "timestamp", "passengers"])
 
     df_sorted = df.sort_values("timestamp")
     last_actions = df_sorted.groupby("van").tail(1)
     out_rows = last_actions[last_actions["status"] == "OUT"].copy()
 
     if out_rows.empty:
-        return pd.DataFrame(columns=["van", "driver", "destination", "purpose", "timestamp"])
+        return pd.DataFrame(columns=["van", "driver", "purpose", "timestamp", "passengers"])
 
-    keep = ["van", "driver", "destination", "purpose", "timestamp", "expected_return", "passengers", "notes"]
+    keep = ["van", "driver", "purpose", "other_purpose", "passengers", "timestamp"]
     keep = [c for c in keep if c in out_rows.columns]
-    return out_rows[keep]
+    understand = out_rows[keep].copy()
+    return understand
 
 def append_staff_log(name: str, reason: str, other_reason: str, action: str, status: str):
     try:
@@ -295,30 +296,32 @@ def append_staff_log(name: str, reason: str, other_reason: str, action: str, sta
     except (APIError, GSpreadException):
         st.error("Could not record this sign-in/sign-out due to a problem talking to Google Sheets.")
 
-def append_van_log(van: str, driver: str, destination: str, purpose: str,
-                   passengers: str, expected_return: str, notes: str,
-                   action: str, status: str):
+def append_van_log(
+    van: str,
+    driver: str,
+    purpose: str,
+    other_purpose: str,
+    passengers: str,
+    action: str,
+    status: str,
+):
+    """Append a van log row to the vans worksheet."""
     try:
         ws = get_or_create_worksheet(
             VANS_SHEET_NAME,
-            ["id", "timestamp", "van", "driver", "destination", "purpose",
-             "passengers", "expected_return", "notes", "action", "status"],
+            ["id", "timestamp", "van", "driver", "purpose", "other_purpose", "passengers", "action", "status"],
         )
+
         df = load_vans_df()
         next_id = 1 if df.empty or df["id"].isna().all() else int(df["id"].max()) + 1
 
         now = datetime.now(EASTERN)
         timestamp_str = now.isoformat()
 
-        row = [next_id, timestamp_str, van, driver, destination, purpose,
-               passengers, expected_return, notes, action, status]
+        row = [next_id, timestamp_str, van, driver, purpose, other_purpose, passengers, action, status]
         ws.append_row(row)
     except (APIError, GSpreadException):
-        st.error("Could not record this van sign-out due to a problem talking to Google Sheets.")
-
-# -------------------------------------------------
-# PAGES
-# -------------------------------------------------
+        st.error("Could not record this van log due to a problem talking to Google Sheets.")
 
 def page_sign_in_out():
     st.header("Staff Sign In / Out")
@@ -409,98 +412,169 @@ def page_vans():
     staff_pins = load_staff_pins()
     staff_names = sorted(staff_pins.keys())
 
-    st.caption("Log van check-outs and returns here. Vans are tracked separately from staff sign-out.")
+    if not staff_names:
+        st.warning("No active staff found in the staff sheet.")
+        return
 
-    # Current van status
+    st.caption("Driver + every passenger must enter their own 4-digit code.")
+
+    # Load van logs and compute current status
     df_vans = load_vans_df()
     df_vans_out = get_vans_out(df_vans)
 
     st.subheader("Vans Out Right Now")
     if df_vans_out.empty:
         st.info("All vans are currently in.")
+        vans_out_set = set()
     else:
         df_disp = df_vans_out.copy()
         df_disp["When"] = df_disp["timestamp"].apply(format_time)
+        # Make purpose display nice
+        if "other_purpose" in df_disp.columns:
+            df_disp["Purpose"] = df_disp.apply(
+                lambda r: r["purpose"] if str(r.get("purpose", "")).strip().lower() != "other" else f'Other: {r.get("other_purpose", "")}',
+                axis=1,
+            )
+        else:
+            df_disp["Purpose"] = df_disp.get("purpose", "")
+
         rename = {
             "van": "Van",
             "driver": "Driver",
-            "destination": "Destination",
-            "purpose": "Purpose",
-            "expected_return": "Expected Back",
             "passengers": "Passengers",
-            "notes": "Notes",
         }
         df_disp = df_disp.rename(columns=rename)
-        show_cols = [c for c in ["Van", "Driver", "Destination", "Purpose", "Expected Back", "Passengers", "Notes", "When"] if c in df_disp.columns]
+        show_cols = [c for c in ["Van", "Driver", "Passengers", "Purpose", "When"] if c in df_disp.columns]
         st.dataframe(df_disp[show_cols], use_container_width=True)
+
+        vans_out_set = set(df_vans_out["van"].astype(str).tolist())
 
     st.divider()
 
-    st.subheader("Log a Van")
+    VANS = ["Van 1", "Van 2", "Van 3"]
+    van = st.selectbox("Select a van", VANS, key="van_select")
 
-    colA, colB, colC = st.columns(3)
-    with colA:
-        van = st.selectbox("Van", VANS, key="van_select")
-    with colB:
-        driver = st.selectbox("Driver name", [""] + staff_names, index=0, key="van_driver")
-    with colC:
-        pin = st.text_input("Driver 4-digit code", type="password", max_chars=4, key="van_pin")
+    is_out = van in vans_out_set
+
+    # -------------------------------
+    # CHECK OUT (Sign Out) - only when van is IN
+    # -------------------------------
+    st.subheader("Check Out a Van")
+
+    if is_out:
+        st.info(f"{van} is currently OUT. Use the Return section below to sign it back in.")
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            driver = st.selectbox("Driver", [""] + staff_names, index=0, key="van_driver")
+        with col2:
+            driver_pin = st.text_input("Driver 4-digit code", type="password", max_chars=4, key="van_driver_pin")
+
+        purpose_choice = st.selectbox(
+            "Purpose",
+            ["Period Off", "Night Off", "Day Off", "Other"],
+            key="van_purpose",
+        )
+        other_purpose = ""
+        if purpose_choice == "Other":
+            other_purpose = st.text_input("Other purpose (required)", key="van_other_purpose")
+
+        st.markdown("**Passengers (each must enter their code)**")
+
+        passenger_names = [n for n in staff_names if n != driver]
+        passengers_selected = st.multiselect(
+            "Add passengers",
+            passenger_names,
+            key="van_passengers",
+        )
+
+        passenger_pins = {}
+        if passengers_selected:
+            for pname in passengers_selected:
+                passenger_pins[pname] = st.text_input(
+                    f"{pname} 4-digit code",
+                    type="password",
+                    max_chars=4,
+                    key=f"van_pin_{pname}",
+                )
+
+        if st.button("Sign Out Van", key="van_checkout_btn"):
+            # Validate driver
+            if not driver:
+                st.warning("Select a driver.")
+                return
+            if staff_pins.get(driver) != str(driver_pin).strip():
+                st.error("Incorrect driver code.")
+                return
+
+            # Validate passengers (each must enter correct code)
+            for pname in passengers_selected:
+                if staff_pins.get(pname) != str(passenger_pins.get(pname, "")).strip():
+                    st.error(f"Incorrect code for {pname}.")
+                    return
+
+            # Validate purpose
+            if purpose_choice == "Other" and not other_purpose.strip():
+                st.warning("Please enter the other purpose.")
+                return
+
+            passengers_str = ", ".join(passengers_selected) if passengers_selected else ""
+
+            append_van_log(
+                van=van,
+                driver=driver,
+                purpose=purpose_choice,
+                other_purpose=other_purpose.strip(),
+                passengers=passengers_str,
+                action="CHECKOUT",
+                status="OUT",
+            )
+            st.success(f"{van} signed out under {driver}.")
+
+            st.cache_data.clear()
+            st.rerun()
+
+    st.divider()
+
+    # -------------------------------
+    # RETURN (Sign In) - only when van is OUT
+    # -------------------------------
+    st.subheader("Return a Van")
+
+    if not is_out:
+        st.info(f"{van} is currently IN. Return is only available when the van is out.")
+        return_driver = st.selectbox("Driver returning the van", [""] + staff_names, index=0, key="van_return_driver_disabled")
+        st.text_input("Driver 4-digit code", type="password", max_chars=4, key="van_return_driver_pin_disabled")
+        st.button("Sign In Van", key="van_return_btn_disabled", disabled=True)
+        return
 
     col1, col2 = st.columns(2)
     with col1:
-        action = st.radio("Action", ["Check Out", "Return"], horizontal=True, key="van_action")
-        destination = st.text_input("Destination", key="van_destination")
-        passengers = st.text_input("Passengers (optional)", key="van_passengers")
+        return_driver = st.selectbox("Driver returning the van", [""] + staff_names, index=0, key="van_return_driver")
     with col2:
-        purpose = st.selectbox("Purpose", VAN_PURPOSES, key="van_purpose")
-        other_purpose = ""
-        if purpose == "Other (type purpose)":
-            other_purpose = st.text_input("Type purpose", key="van_other_purpose")
-        expected_return = st.text_input("Expected back (optional)", placeholder="e.g., 2:30 PM", key="van_expected_return")
+        return_driver_pin = st.text_input("Driver 4-digit code", type="password", max_chars=4, key="van_return_driver_pin")
 
-    notes = st.text_area("Notes (optional)", key="van_notes")
-
-    if st.button("Submit Van Log", key="van_submit"):
-        if not driver:
+    if st.button("Sign In Van", key="van_return_btn"):
+        if not return_driver:
             st.warning("Select a driver.")
             return
-        if staff_pins.get(driver) != str(pin).strip():
-            st.error("Incorrect code.")
+        if staff_pins.get(return_driver) != str(return_driver_pin).strip():
+            st.error("Incorrect driver code.")
             return
 
-        final_purpose = other_purpose.strip() if purpose == "Other (type purpose)" else purpose
-
-        if action == "Check Out":
-            if not destination.strip():
-                st.warning("Add a destination for a check-out.")
-                return
-            append_van_log(
-                van=van,
-                driver=driver,
-                destination=destination.strip(),
-                purpose=final_purpose,
-                passengers=passengers.strip(),
-                expected_return=expected_return.strip(),
-                notes=notes.strip(),
-                action="CHECK_OUT",
-                status="OUT",
-            )
-            st.success(f"{van} checked out by {driver}.")
-        else:
-            append_van_log(
-                van=van,
-                driver=driver,
-                destination=destination.strip(),
-                purpose=final_purpose,
-                passengers=passengers.strip(),
-                expected_return=expected_return.strip(),
-                notes=notes.strip(),
-                action="RETURN",
-                status="IN",
-            )
-            st.success(f"{van} returned (logged by {driver}).")
+        append_van_log(
+            van=van,
+            driver=return_driver,
+            purpose="",
+            other_purpose="",
+            passengers="",
+            action="RETURN",
+            status="IN",
+        )
+        st.success(f"{van} signed in (returned by {return_driver}).")
 
         st.cache_data.clear()
+        st.rerun()
 
 def page_admin_history():
     st.header("Admin / History")
@@ -552,6 +626,8 @@ def page_admin_history():
 
 def main():
     st.set_page_config(page_title="Bauercrest Sign Out", layout="wide")
+    st.image("logo-header-2.png", use_container_width=True)
+
 
     st.title("Camp Bauercrest Sign Out")
 
