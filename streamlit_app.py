@@ -266,17 +266,38 @@ def vans_page():
                 st.error("Please enter the other purpose.")
                 return
 
-            row = {
-                "id": str(uuid.uuid4())[:8],
-                "timestamp": now_iso(),
-                "van": available,
-                "driver": driver,
-                "purpose": purpose,
-                "passengers": ", ".join(passengers),
-                "other_purpose": other_purpose.strip(),
-                "action": "CHECKOUT",
-                "status": "OUT",
-            }
+            # Pull last known checkout details for this van so passengers appear on CHECKIN too
+last_passengers = ""
+last_purpose = ""
+last_other_purpose = ""
+
+try:
+    tmp = vans_df.copy()
+    tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
+    tmp = tmp.sort_values("timestamp")
+    van_rows = tmp[tmp["van"] == van_to_in]
+    if not van_rows.empty:
+        # Look for the most recent OUT row (preferred)
+        out_rows = van_rows[van_rows["status"].astype(str).str.upper() == "OUT"]
+        src = out_rows.iloc[-1] if not out_rows.empty else van_rows.iloc[-1]
+        last_passengers = str(src.get("passengers", "")).strip()
+        last_purpose = str(src.get("purpose", "")).strip()
+        last_other_purpose = str(src.get("other_purpose", "")).strip()
+except Exception:
+    pass
+
+row = {
+    "id": str(uuid.uuid4())[:8],
+    "timestamp": now_iso(),
+    "van": van_to_in,
+    "driver": return_driver,
+    "purpose": last_purpose,
+    "passengers": last_passengers,
+    "other_purpose": last_other_purpose,
+    "action": "CHECKIN",
+    "status": "IN",
+}
+
             append_row_aligned(spreadsheet_id, vans_sheet_name, row)
             st.session_state["van_flash"] = f"{available} signed out under {driver}."
             st.rerun()
