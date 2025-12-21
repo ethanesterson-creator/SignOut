@@ -286,21 +286,6 @@ try:
 except Exception:
     pass
 
-row = {
-    "id": str(uuid.uuid4())[:8],
-    "timestamp": now_iso(),
-    "van": van_to_in,
-    "driver": return_driver,
-    "purpose": last_purpose,
-    "passengers": last_passengers,
-    "other_purpose": last_other_purpose,
-    "action": "CHECKIN",
-    "status": "IN",
-}
-
-    append_row_aligned(spreadsheet_id, vans_sheet_name, row)
-    st.session_state["van_flash"] = f"{available} signed out under {driver}."
-    st.rerun()
 
     # SIGN IN (only if a van is out)
     if out_vans:
@@ -318,25 +303,43 @@ row = {
 
             submitted_in = st.form_submit_button("Sign In Van", use_container_width=True)
 
-        if submitted_in:
-            if normalize_pin(return_driver_code) != pin_map.get(return_driver, "----"):
-                st.error("Wrong driver code.")
-                return
+        # Pull last known OUT row details so CHECKIN also shows passengers/purpose
+last_passengers = ""
+last_purpose = ""
+last_other_purpose = ""
 
-            row = {
-                "id": str(uuid.uuid4())[:8],
-                "timestamp": now_iso(),
-                "van": van_to_in,
-                "driver": return_driver,
-                "purpose": "",
-                "passengers": "",
-                "other_purpose": "",
-                "action": "CHECKIN",
-                "status": "IN",
-            }
-            append_row_aligned(spreadsheet_id, vans_sheet_name, row)
-            st.session_state["van_flash"] = f"{van_to_in} signed back in under {return_driver}."
-            st.rerun()
+try:
+    tmp = vans_df.copy()
+    tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
+    tmp = tmp.sort_values("timestamp")
+    van_rows = tmp[tmp["van"] == van_to_in]
+
+    if not van_rows.empty:
+        out_rows = van_rows[van_rows["status"].astype(str).str.upper() == "OUT"]
+        src = out_rows.iloc[-1] if not out_rows.empty else van_rows.iloc[-1]
+
+        last_passengers = str(src.get("passengers", "")).strip()
+        last_purpose = str(src.get("purpose", "")).strip()
+        last_other_purpose = str(src.get("other_purpose", "")).strip()
+except Exception:
+    pass
+
+row = {
+    "id": str(uuid.uuid4())[:8],
+    "timestamp": now_iso(),
+    "van": van_to_in,
+    "driver": return_driver,
+    "purpose": last_purpose,
+    "passengers": last_passengers,
+    "other_purpose": last_other_purpose,
+    "action": "CHECKIN",
+    "status": "IN",
+}
+
+append_row_aligned(spreadsheet_id, vans_sheet_name, row)
+st.session_state["van_flash"] = f"{van_to_in} signed back in under {return_driver}."
+st.rerun()
+
 
 # ----------------------------
 # Main app (so it actually loads)
