@@ -6,7 +6,13 @@ from datetime import datetime
 import pytz
 import uuid
 
+# ----------------------------
+# Page config
+# ----------------------------
+st.set_page_config(page_title="Camp Bauercrest Sign Out", layout="wide")
+
 TZ = pytz.timezone("America/New_York")
+LOGO_PATH = "logo-header-2.png"  # adjust if needed (e.g., "assets/logo-header-2.png")
 
 DEFAULT_STAFF_SHEET = "staff"
 DEFAULT_VANS_SHEET = "vans"
@@ -20,32 +26,54 @@ VANS_REQUIRED_HEADERS = [
 ]
 
 # ----------------------------
-# Google client (cached)
+# Safe header UI
+# ----------------------------
+def show_header():
+    try:
+        st.image(LOGO_PATH, width=220)
+    except Exception:
+        pass
+    st.title("Camp Bauercrest Sign Out")
+
+def now_iso():
+    return datetime.now(TZ).isoformat(timespec="seconds")
+
+def normalize_pin(pin) -> str:
+    """
+    Normalize any staff PIN / user input to a 4-digit string.
+    Handles numbers, strings, and leading zeros.
+    """
+    s = str(pin).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    # remove accidental spaces
+    s = s.replace(" ", "")
+    return s.zfill(4)
+
+# ----------------------------
+# Google Sheets client (cached)
 # ----------------------------
 @st.cache_resource
-def _gs_client():
+def gs_client():
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
-    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=scopes
+    )
     return gspread.authorize(creds)
 
 @st.cache_resource
-def _spreadsheet(spreadsheet_id: str):
-    return _gs_client().open_by_key(spreadsheet_id)
+def open_spreadsheet(spreadsheet_id: str):
+    return gs_client().open_by_key(spreadsheet_id)
 
-def _now_iso():
-    return datetime.now(TZ).isoformat(timespec="seconds")
-
-def _normalize_pin(pin) -> str:
-    # Handles numbers, strings, and leading zeros reliably
-    s = str(pin).strip()
-    if s.endswith(".0"):
-        s = s[:-2]
-    return s.zfill(4)
-
-def _get_or_create_ws(spreadsheet, title: str, required_headers: list[str]):
+def get_or_create_ws(spreadsheet, title: str, required_headers: list[str]):
+    """
+    Ensures worksheet exists and contains required headers (adds missing headers to the end).
+    Does NOT reorder existing columns.
+    """
     try:
         ws = spreadsheet.worksheet(title)
     except gspread.WorksheetNotFound:
@@ -58,7 +86,6 @@ def _get_or_create_ws(spreadsheet, title: str, required_headers: list[str]):
         ws.append_row(required_headers)
         return ws
 
-    # Ensure required headers exist (append missing to the end; do NOT reorder user columns)
     missing = [h for h in required_headers if h not in headers]
     if missing:
         new_headers = headers + missing
@@ -69,52 +96,52 @@ def _get_or_create_ws(spreadsheet, title: str, required_headers: list[str]):
 
 @st.cache_data(ttl=900)  # 15 minutes (kiosk-friendly)
 def load_staff_cached(spreadsheet_id: str, staff_sheet_name: str) -> pd.DataFrame:
-    ss = _spreadsheet(spreadsheet_id)
-    ws = _get_or_create_ws(ss, staff_sheet_name, ["name", "pin", "active"])
+    ss = open_spreadsheet(spreadsheet_id)
+    ws = get_or_create_ws(ss, staff_sheet_name, ["name", "pin", "active"])
     df = pd.DataFrame(ws.get_all_records())
 
     if df.empty:
         return df
 
     df["name"] = df["name"].astype(str).str.strip()
-    df["pin"] = df["pin"].apply(_normalize_pin)
+    df["pin"] = df["pin"].apply(normalize_pin)
 
     active = df["active"].astype(str).str.strip().str.lower()
     df = df[active.isin(["true", "yes", "1"])]
+
     return df
 
-@st.cache_data(ttl=10)  # 10 seconds: reduces reads massively, still feels “live” on kiosks
+@st.cache_data(ttl=10)  # 10 seconds (prevents quota blowups, still feels live)
 def load_vans_cached(spreadsheet_id: str, vans_sheet_name: str) -> pd.DataFrame:
-    ss = _spreadsheet(spreadsheet_id)
-    ws = _get_or_create_ws(ss, vans_sheet_name, VANS_REQUIRED_HEADERS)
+    ss = open_spreadsheet(spreadsheet_id)
+    ws = get_or_create_ws(ss, vans_sheet_name, VANS_REQUIRED_HEADERS)
     return pd.DataFrame(ws.get_all_records())
 
 @st.cache_data(ttl=300)
 def vans_headers_cached(spreadsheet_id: str, vans_sheet_name: str) -> list[str]:
-    ss = _spreadsheet(spreadsheet_id)
-    ws = _get_or_create_ws(ss, vans_sheet_name, VANS_REQUIRED_HEADERS)
-    headers = [h.strip() for h in ws.row_values(1) if str(h).strip()]
-    return headers
+    ss = open_spreadsheet(spreadsheet_id)
+    ws = get_or_create_ws(ss, vans_sheet_name, VANS_REQUIRED_HEADERS)
+    return [h.strip() for h in ws.row_values(1) if str(h).strip()]
 
 def append_row_aligned(spreadsheet_id: str, vans_sheet_name: str, row_dict: dict):
     """
-    Writes ONE row and aligns values to the sheet's header row to prevent column drift.
+    Write one row aligned to the worksheet's actual header order.
+    Prevents column drift permanently.
     """
-    ss = _spreadsheet(spreadsheet_id)
-    ws = _get_or_create_ws(ss, vans_sheet_name, VANS_REQUIRED_HEADERS)
+    ss = open_spreadsheet(spreadsheet_id)
+    ws = get_or_create_ws(ss, vans_sheet_name, VANS_REQUIRED_HEADERS)
     headers = vans_headers_cached(spreadsheet_id, vans_sheet_name)
-
     row = [row_dict.get(h, "") for h in headers]
     ws.append_row(row)
 
-    # Invalidate caches so UI updates immediately after write
+    # Clear caches so UI updates right after a write
     load_vans_cached.clear()
     vans_headers_cached.clear()
 
+# ----------------------------
+# Vans status logic
+# ----------------------------
 def compute_van_status(vans_df: pd.DataFrame) -> dict:
-    """
-    status_map[van] = dict(status IN/OUT + last details)
-    """
     status_map = {v: {"status": "IN"} for v in VANS}
     if vans_df is None or vans_df.empty:
         return status_map
@@ -142,7 +169,6 @@ def compute_van_status(vans_df: pd.DataFrame) -> dict:
             "other_purpose": str(last.get("other_purpose", "")).strip(),
             "passengers": str(last.get("passengers", "")).strip(),
             "action": str(last.get("action", "")).strip(),
-            "timestamp": last.get("timestamp"),
         }
 
     return status_map
@@ -153,7 +179,18 @@ def next_available_van(status_map: dict) -> str | None:
             return v
     return None
 
+# ----------------------------
+# Vans page (driver code only; passengers names only)
+# ----------------------------
 def vans_page():
+    # Secrets check
+    if "SPREADSHEET_ID" not in st.secrets:
+        st.error("Missing SPREADSHEET_ID in Streamlit secrets.")
+        return
+    if "gcp_service_account" not in st.secrets:
+        st.error("Missing gcp_service_account in Streamlit secrets.")
+        return
+
     spreadsheet_id = st.secrets["SPREADSHEET_ID"]
     staff_sheet_name = st.secrets.get("STAFF_SHEET_NAME", DEFAULT_STAFF_SHEET)
     vans_sheet_name = st.secrets.get("VANS_SHEET_NAME", DEFAULT_VANS_SHEET)
@@ -171,10 +208,10 @@ def vans_page():
 
     vans_df = load_vans_cached(spreadsheet_id, vans_sheet_name)
     status_map = compute_van_status(vans_df)
+
     out_vans = [v for v in VANS if status_map.get(v, {}).get("status") == "OUT"]
     available = next_available_van(status_map)
 
-    # Flash message across reruns
     flash = st.session_state.pop("van_flash", "")
     if flash:
         st.success(flash)
@@ -188,13 +225,14 @@ def vans_page():
             purpose = info.get("purpose", "")
             if purpose == "Other" and info.get("other_purpose"):
                 purpose = f"Other: {info.get('other_purpose')}"
-            st.write(f"**{v}** — Driver: **{info.get('driver','')}** | Purpose: **{purpose}** | Passengers: {info.get('passengers','')}")
+            st.write(
+                f"**{v}** — Driver: **{info.get('driver','')}** | "
+                f"Purpose: **{purpose}** | Passengers: {info.get('passengers','')}"
+            )
 
     st.divider()
 
-    # ----------------------------
-    # SIGN OUT (Form prevents rerun spam while typing)
-    # ----------------------------
+    # SIGN OUT (Form = fewer reruns and fewer API reads)
     st.subheader("Sign Out a Van")
     if available is None:
         st.warning("No vans available. All three vans are currently out.")
@@ -221,7 +259,7 @@ def vans_page():
             submitted = st.form_submit_button("Sign Out Van", use_container_width=True)
 
         if submitted:
-            if _normalize_pin(driver_code) != pin_map.get(driver, "----"):
+            if normalize_pin(driver_code) != pin_map.get(driver, "----"):
                 st.error("Wrong driver code.")
                 return
             if purpose == "Other" and not other_purpose.strip():
@@ -230,7 +268,7 @@ def vans_page():
 
             row = {
                 "id": str(uuid.uuid4())[:8],
-                "timestamp": _now_iso(),
+                "timestamp": now_iso(),
                 "van": available,
                 "driver": driver,
                 "purpose": purpose,
@@ -243,14 +281,11 @@ def vans_page():
             st.session_state["van_flash"] = f"{available} signed out under {driver}."
             st.rerun()
 
-    # ----------------------------
-    # SIGN IN (only if any vans are out)
-    # ----------------------------
+    # SIGN IN (only if a van is out)
     if out_vans:
         st.divider()
         st.subheader("Sign In a Van")
 
-        # If only one van is out, no selection
         van_to_in = out_vans[0] if len(out_vans) == 1 else st.selectbox("Which van is returning?", out_vans)
 
         with st.form("van_signin_form", clear_on_submit=True):
@@ -263,13 +298,13 @@ def vans_page():
             submitted_in = st.form_submit_button("Sign In Van", use_container_width=True)
 
         if submitted_in:
-            if _normalize_pin(return_driver_code) != pin_map.get(return_driver, "----"):
+            if normalize_pin(return_driver_code) != pin_map.get(return_driver, "----"):
                 st.error("Wrong driver code.")
                 return
 
             row = {
                 "id": str(uuid.uuid4())[:8],
-                "timestamp": _now_iso(),
+                "timestamp": now_iso(),
                 "van": van_to_in,
                 "driver": return_driver,
                 "purpose": "",
@@ -281,3 +316,24 @@ def vans_page():
             append_row_aligned(spreadsheet_id, vans_sheet_name, row)
             st.session_state["van_flash"] = f"{van_to_in} signed back in under {return_driver}."
             st.rerun()
+
+# ----------------------------
+# Main app (so it actually loads)
+# ----------------------------
+def main():
+    show_header()
+
+    page = st.sidebar.radio(
+        "Navigation",
+        ["Sign In / Out", "Who’s Out", "Vans", "Admin / History"],
+        index=2
+    )
+
+    if page == "Vans":
+        vans_page()
+    else:
+        st.info("Vans is fixed + quota-safe now. Next step is merging this into your old pages.")
+        st.write("Pick **Vans** from the sidebar to test.")
+
+if __name__ == "__main__":
+    main()
