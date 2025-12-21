@@ -298,9 +298,9 @@ row = {
     "status": "IN",
 }
 
-            append_row_aligned(spreadsheet_id, vans_sheet_name, row)
-            st.session_state["van_flash"] = f"{available} signed out under {driver}."
-            st.rerun()
+    append_row_aligned(spreadsheet_id, vans_sheet_name, row)
+    st.session_state["van_flash"] = f"{available} signed out under {driver}."
+    st.rerun()
 
     # SIGN IN (only if a van is out)
     if out_vans:
