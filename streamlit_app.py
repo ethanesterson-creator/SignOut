@@ -392,7 +392,7 @@ def page_vans():
 
             row = {
                 "id": str(uuid.uuid4())[:8],
-                "timestamp": datetime.now(CAMP_TZ).isoformat(timespec="seconds"),
+                "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
                 "van": available,
                 "driver": driver,
                 "purpose": purpose,
@@ -446,7 +446,7 @@ def page_vans():
 
             row = {
                 "id": str(uuid.uuid4())[:8],
-                "timestamp": datetime.now(CAMP_TZ).isoformat(timespec="seconds"),
+                "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
                 "van": van_to_in,
                 "driver": return_driver,
                 "purpose": last_purpose,
