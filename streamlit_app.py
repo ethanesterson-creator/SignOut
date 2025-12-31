@@ -391,7 +391,6 @@ def page_vans():
             submitted = st.form_submit_button("Sign Out Van", use_container_width=True)
 
         if submitted:
-        # Read passengers from session_state to avoid occasional form-submit dropouts
         passengers_selected = st.session_state.get('van_passengers', passengers) or []
         if isinstance(passengers_selected, str):
             passengers_selected = [p.strip() for p in passengers_selected.split(',') if p.strip()]
