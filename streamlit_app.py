@@ -9,9 +9,6 @@ import gspread
 from gspread.exceptions import APIError, GSpreadException
 from google.oauth2.service_account import Credentials
 
-# Camp timezone (Eastern Time)
-TZ = pytz.timezone("US/Eastern")
-
 # -------------------------------------------------
 # CONFIG
 # -------------------------------------------------
@@ -340,6 +337,15 @@ def next_available_van(status_map: dict) -> str | None:
 def page_vans():
     st.header("Vans")
 
+    # --- form reset counters (prevents StreamlitAPIException + flaky passenger capture) ---
+    if "van_form_nonce" not in st.session_state:
+        st.session_state["van_form_nonce"] = 0
+    if "van_signin_nonce" not in st.session_state:
+        st.session_state["van_signin_nonce"] = 0
+
+    van_nonce = st.session_state["van_form_nonce"]
+    signin_nonce = st.session_state["van_signin_nonce"]
+
     # Flash message
     flash = st.session_state.pop("van_flash", "")
     if flash:
@@ -351,14 +357,6 @@ def page_vans():
     out_vans = [v for v in VANS if status_map.get(v, {}).get("status") == "OUT"]
     available = next_available_van(status_map)
 
-    # Form nonce keys (prevents StreamlitAPIException when clearing widgets)
-    if "van_form_nonce" not in st.session_state:
-        st.session_state["van_form_nonce"] = 0
-    if "van_signin_nonce" not in st.session_state:
-        st.session_state["van_signin_nonce"] = 0
-    van_nonce = st.session_state["van_form_nonce"]
-    signin_nonce = st.session_state["van_signin_nonce"]
-
     st.subheader("Vans Out Right Now")
     if not out_vans:
         st.info("All vans are currently in.")
@@ -368,29 +366,58 @@ def page_vans():
             purpose = info.get("purpose", "")
             if purpose == "Other" and info.get("other_purpose"):
                 purpose = f"Other: {info.get('other_purpose')}"
-            st.write(f"**{v}** — Driver: **{info.get('driver','')}** | Purpose: **{purpose}** | Passengers: {info.get('passengers','')}")
+            passengers_txt = info.get("passengers", "")
+            st.write(
+                f"**{v}** — Driver: **{info.get('driver','')}** | "
+                f"Purpose: **{purpose}** | Passengers: {passengers_txt}"
+            )
 
     st.divider()
-    st.subheader("Sign Out a Van")
 
+    # ----------------------------
+    # SIGN OUT
+    # ----------------------------
+    st.subheader("Sign Out a Van")
     if available is None:
-        st.warning("No vans available. All vans are currently out.")
+        st.warning("No vans available. All three vans are currently out.")
     else:
         st.info(f"Next available: **{available}**")
 
-        # Use explicit keys + manual clearing (fixes "passengers sometimes blank" bug)
+        # IMPORTANT: clear_on_submit=False + nonce-based keys ensures passengers never vanish mid-submit
         with st.form("van_signout_form", clear_on_submit=False):
-            driver = st.selectbox("Driver", options=sorted(STAFF_PINS.keys()), key=f"van_driver_{van_nonce}")
-            driver_code = st.text_input("Driver 4-digit code", type="password", key=f"van_driver_code_{van_nonce}")
-            purpose = st.selectbox("Purpose", VAN_PURPOSES, key=f"van_purpose_{van_nonce}")
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                driver = st.selectbox(
+                    "Driver",
+                    options=sorted(STAFF_PINS.keys()),
+                    key=f"van_driver_{van_nonce}",
+                )
+            with c2:
+                driver_code = st.text_input(
+                    "Driver 4-digit code",
+                    type="password",
+                    key=f"van_driver_code_{van_nonce}",
+                )
+
+            purpose = st.selectbox(
+                "Purpose",
+                VAN_PURPOSES,
+                key=f"van_purpose_{van_nonce}",
+            )
+
             other_purpose = ""
             if purpose == "Other":
-                other_purpose = st.text_input("Other purpose (required)", key=f"van_other_purpose_{van_nonce}")
+                other_purpose = st.text_input(
+                    "Other purpose (required)",
+                    key=f"van_other_purpose_{van_nonce}",
+                )
+
             passengers = st.multiselect(
                 "Passengers (select everyone riding with the driver)",
                 options=[n for n in sorted(STAFF_PINS.keys()) if n != driver],
                 key=f"van_passengers_{van_nonce}",
             )
+
             submitted = st.form_submit_button("Sign Out Van", use_container_width=True)
 
         if submitted:
@@ -401,9 +428,13 @@ def page_vans():
                 st.error("Please enter the other purpose.")
                 return
 
+            # Ensure passengers is always a list (defensive)
+            if passengers is None:
+                passengers = []
+
             row = {
                 "id": str(uuid.uuid4())[:8],
-                "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
+                "timestamp": datetime.now(EASTERN).isoformat(timespec="seconds"),
                 "van": available,
                 "driver": driver,
                 "purpose": purpose,
@@ -413,12 +444,13 @@ def page_vans():
                 "status": "OUT",
             }
             append_vans_row(row)
-            # Clear form fields after successful sign out
             st.session_state["van_flash"] = f"{available} signed out under {driver}."
-            st.session_state["van_form_nonce"] += 1
+            st.session_state["van_form_nonce"] += 1  # resets the form safely
             st.rerun()
 
+    # ----------------------------
     # SIGN IN (only if a van is out)
+    # ----------------------------
     if out_vans:
         st.divider()
         st.subheader("Sign In a Van")
@@ -426,8 +458,20 @@ def page_vans():
         van_to_in = out_vans[0] if len(out_vans) == 1 else st.selectbox("Which van is returning?", out_vans)
 
         with st.form("van_signin_form", clear_on_submit=False):
-            return_driver = st.selectbox("Driver returning the van", options=sorted(STAFF_PINS.keys()), key=f"van_return_driver_{signin_nonce}")
-            return_driver_code = st.text_input("Driver 4-digit code", type="password", key=f"van_return_driver_code_{signin_nonce}")
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                return_driver = st.selectbox(
+                    "Driver returning the van",
+                    options=sorted(STAFF_PINS.keys()),
+                    key=f"van_return_driver_{signin_nonce}",
+                )
+            with c2:
+                return_driver_code = st.text_input(
+                    "Driver 4-digit code",
+                    type="password",
+                    key=f"van_return_driver_code_{signin_nonce}",
+                )
+
             submitted_in = st.form_submit_button("Sign In Van", use_container_width=True)
 
         if submitted_in:
@@ -435,7 +479,7 @@ def page_vans():
                 st.error("Wrong driver code.")
                 return
 
-            # Copy last OUT row details so CHECKIN row also shows passengers/purpose
+            # Copy last OUT-row details so CHECKIN row also shows passengers/purpose
             last_passengers = ""
             last_purpose = ""
             last_other_purpose = ""
@@ -455,7 +499,7 @@ def page_vans():
 
             row = {
                 "id": str(uuid.uuid4())[:8],
-                "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
+                "timestamp": datetime.now(EASTERN).isoformat(timespec="seconds"),
                 "van": van_to_in,
                 "driver": return_driver,
                 "purpose": last_purpose,
@@ -468,11 +512,6 @@ def page_vans():
             st.session_state["van_flash"] = f"{van_to_in} signed back in under {return_driver}."
             st.session_state["van_signin_nonce"] += 1
             st.rerun()
-
-# -------------------------------------
-# PAGES
-# -------------------------------------------------
-
 def page_sign_in_out():
     st.header("Staff Sign-Out / Sign-In")
 
@@ -631,42 +670,6 @@ def page_admin_history():
         mime="text/csv",
     )
 
-    # -----------------------------
-    # Van Log History
-    # -----------------------------
-    df_vans = load_vans_df_cached()
-    if df_vans is None or df_vans.empty:
-        st.subheader("Van Log History")
-        st.info("No van logs recorded yet.")
-    else:
-        st.subheader("Van Log History")
-        dfv = df_vans.copy()
-        if "timestamp" in dfv.columns:
-            dfv["timestamp"] = pd.to_datetime(dfv["timestamp"], errors="coerce")
-            dfv["timestamp_str"] = dfv["timestamp"].apply(format_time)
-        else:
-            dfv["timestamp_str"] = ""
-        dfv = dfv.rename(columns={
-            "id": "ID",
-            "timestamp_str": "Time",
-            "van": "Van",
-            "driver": "Driver",
-            "purpose": "Purpose",
-            "passengers": "Passengers",
-            "other_purpose": "Other Purpose",
-            "action": "Action",
-            "status": "Status",
-        })
-        cols = [c for c in ["ID","Time","Van","Driver","Purpose","Passengers","Other Purpose","Action","Status"] if c in dfv.columns]
-        st.dataframe(dfv[cols], use_container_width=True)
-        st.download_button(
-            "Download Van Log as CSV",
-            data=dfv[cols].to_csv(index=False),
-            file_name="van_log.csv",
-            mime="text/csv",
-        )
-
-
     st.markdown("---")
 
     st.subheader("Delete Specific Log Entries (for testing / pre-season only)")
@@ -730,7 +733,7 @@ def main():
 
     logo_path = Path("logo-header-2.png")
     if logo_path.exists():
-        st.sidebar.image(str(logo_path), use_container_width=True)
+        st.sidebar.image(str(logo_path), use_column_width=True)
 
     st.sidebar.caption("Track who’s out of camp, safely and clearly.")
 
