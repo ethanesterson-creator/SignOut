@@ -351,6 +351,14 @@ def page_vans():
     out_vans = [v for v in VANS if status_map.get(v, {}).get("status") == "OUT"]
     available = next_available_van(status_map)
 
+    # Form nonce keys (prevents StreamlitAPIException when clearing widgets)
+    if "van_form_nonce" not in st.session_state:
+        st.session_state["van_form_nonce"] = 0
+    if "van_signin_nonce" not in st.session_state:
+        st.session_state["van_signin_nonce"] = 0
+    van_nonce = st.session_state["van_form_nonce"]
+    signin_nonce = st.session_state["van_signin_nonce"]
+
     st.subheader("Vans Out Right Now")
     if not out_vans:
         st.info("All vans are currently in.")
@@ -372,16 +380,16 @@ def page_vans():
 
         # Use explicit keys + manual clearing (fixes "passengers sometimes blank" bug)
         with st.form("van_signout_form", clear_on_submit=False):
-            driver = st.selectbox("Driver", options=sorted(STAFF_PINS.keys()), key="van_driver")
-            driver_code = st.text_input("Driver 4-digit code", type="password", key="van_driver_code")
-            purpose = st.selectbox("Purpose", VAN_PURPOSES, key="van_purpose")
+            driver = st.selectbox("Driver", options=sorted(STAFF_PINS.keys()), key=f"van_driver_{van_nonce}")
+            driver_code = st.text_input("Driver 4-digit code", type="password", key=f"van_driver_code_{van_nonce}")
+            purpose = st.selectbox("Purpose", VAN_PURPOSES, key=f"van_purpose_{van_nonce}")
             other_purpose = ""
             if purpose == "Other":
-                other_purpose = st.text_input("Other purpose (required)", key="van_other_purpose")
+                other_purpose = st.text_input("Other purpose (required)", key=f"van_other_purpose_{van_nonce}")
             passengers = st.multiselect(
                 "Passengers (select everyone riding with the driver)",
                 options=[n for n in sorted(STAFF_PINS.keys()) if n != driver],
-                key="van_passengers",
+                key=f"van_passengers_{van_nonce}",
             )
             submitted = st.form_submit_button("Sign Out Van", use_container_width=True)
 
@@ -406,10 +414,8 @@ def page_vans():
             }
             append_vans_row(row)
             # Clear form fields after successful sign out
-            for k in ["van_driver_code", "van_other_purpose", "van_passengers"]:
-                if k in st.session_state:
-                    st.session_state[k] = "" if k != "van_passengers" else []
             st.session_state["van_flash"] = f"{available} signed out under {driver}."
+            st.session_state["van_form_nonce"] += 1
             st.rerun()
 
     # SIGN IN (only if a van is out)
@@ -419,9 +425,9 @@ def page_vans():
 
         van_to_in = out_vans[0] if len(out_vans) == 1 else st.selectbox("Which van is returning?", out_vans)
 
-        with st.form("van_signin_form", clear_on_submit=True):
-            return_driver = st.selectbox("Driver returning the van", options=sorted(STAFF_PINS.keys()))
-            return_driver_code = st.text_input("Driver 4-digit code", type="password")
+        with st.form("van_signin_form", clear_on_submit=False):
+            return_driver = st.selectbox("Driver returning the van", options=sorted(STAFF_PINS.keys()), key=f"van_return_driver_{signin_nonce}")
+            return_driver_code = st.text_input("Driver 4-digit code", type="password", key=f"van_return_driver_code_{signin_nonce}")
             submitted_in = st.form_submit_button("Sign In Van", use_container_width=True)
 
         if submitted_in:
@@ -460,6 +466,7 @@ def page_vans():
             }
             append_vans_row(row)
             st.session_state["van_flash"] = f"{van_to_in} signed back in under {return_driver}."
+            st.session_state["van_signin_nonce"] += 1
             st.rerun()
 
 # -------------------------------------
@@ -723,7 +730,7 @@ def main():
 
     logo_path = Path("logo-header-2.png")
     if logo_path.exists():
-        st.sidebar.image(str(logo_path), use_column_width=True)
+        st.sidebar.image(str(logo_path), use_container_width=True)
 
     st.sidebar.caption("Track who’s out of camp, safely and clearly.")
 
