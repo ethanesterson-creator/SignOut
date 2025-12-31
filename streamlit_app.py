@@ -53,7 +53,7 @@ REASONS = [
 ]
 
 VANS = ["Van 1", "Van 2", "Van 3"]
-VAN_PURPOSES = ["Period Off", "Night Off", "Day Off", "Other", "Field Trip", "Tournament"]
+VAN_PURPOSES = ["Period Off", "Night Off", "Day Off", "Field Trip", "Tournament", "Other"]
 
 ADMIN_PASSWORD = "Hyaffa26"
 EASTERN = pytz.timezone("US/Eastern")
