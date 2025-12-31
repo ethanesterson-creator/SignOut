@@ -32,7 +32,7 @@ STAFF_PINS = {
     "Zach Baum": "2194",
     "Darren Sands": "6450",
     "Ethan Esterson": "9032",
-    "Asher Schiillin": "5179",
+    "Asher Schillin": "5179",
     "Brody Masters": "7624",
     "Matt Schultz": "4482",
     "Max Pollack": "3901",
