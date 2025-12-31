@@ -717,7 +717,7 @@ def page_admin_history():
         )
 
 
-st.markdown("---")
+    st.markdown("---")
 
     st.subheader("Delete Specific Log Entries (for testing / pre-season only)")
 
