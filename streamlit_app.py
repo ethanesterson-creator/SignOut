@@ -740,7 +740,7 @@ def main():
     if logo_path.exists():
         st.sidebar.image(str(logo_path), use_column_width=True)
 
-    st.sidebar.caption("Track who’s out of camp, safely and clearly.")
+    st.sidebar.caption("Sign in and out with your 4-digit code.")
 
     page = st.sidebar.radio(
         "Go to",
