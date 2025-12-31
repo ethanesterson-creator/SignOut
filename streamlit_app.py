@@ -9,6 +9,9 @@ import gspread
 from gspread.exceptions import APIError, GSpreadException
 from google.oauth2.service_account import Credentials
 
+# Camp timezone (Eastern Time)
+TZ = pytz.timezone("US/Eastern")
+
 # -------------------------------------------------
 # CONFIG
 # -------------------------------------------------
