@@ -3,14 +3,14 @@ import pandas as pd
 from datetime import datetime
 from pathlib import Path
 import pytz
-
-# Camp timezone (Eastern Time)
-TZ = pytz.timezone('US/Eastern')
 import uuid
 
 import gspread
 from gspread.exceptions import APIError, GSpreadException
 from google.oauth2.service_account import Credentials
+
+# Camp timezone (Eastern Time)
+TZ = pytz.timezone("US/Eastern")
 
 # -------------------------------------------------
 # CONFIG
@@ -338,14 +338,12 @@ def next_available_van(status_map: dict) -> str | None:
     return None
 
 def page_vans():
-    # --- Safe form reset (must run BEFORE widgets are created) ---
-    if st.session_state.get('van_reset', False):
-        for k in ['van_driver_code', 'van_other_purpose', 'van_passengers']:
-            if k in st.session_state:
-                st.session_state.pop(k, None)
-        st.session_state['van_reset'] = False
-
     st.header("Vans")
+    # Form nonce (forces fresh widget keys after submit; prevents intermittent blank multiselect)
+    if "van_form_nonce" not in st.session_state:
+        st.session_state["van_form_nonce"] = 0
+    van_nonce = st.session_state["van_form_nonce"]
+
 
     # Flash message
     flash = st.session_state.pop("van_flash", "")
@@ -377,23 +375,30 @@ def page_vans():
     else:
         st.info(f"Next available: **{available}**")
 
+
+        # Van sign-out form (stable + reliable: no intermittent blank passengers)
         with st.form("van_signout_form", clear_on_submit=False):
-            driver = st.selectbox("Driver", options=sorted(STAFF_PINS.keys()))
-            driver_code = st.text_input("Driver 4-digit code", type="password")
-            purpose = st.selectbox("Purpose", VAN_PURPOSES)
+            driver = st.selectbox("Driver", options=sorted(STAFF_PINS.keys()), key=f"van_driver_{van_nonce}")
+            driver_code = st.text_input("Driver 4-digit code", type="password", key=f"van_driver_code_{van_nonce}")
+            purpose = st.selectbox("Purpose", VAN_PURPOSES, key=f"van_purpose_{van_nonce}")
             other_purpose = ""
             if purpose == "Other":
-                other_purpose = st.text_input("Other purpose (required)")
+                other_purpose = st.text_input("Other purpose (required)", key=f"van_other_purpose_{van_nonce}")
+
+            # IMPORTANT: passengers options depend on driver; read final value from session_state on submit
             passengers = st.multiselect(
                 "Passengers (select everyone riding with the driver)",
                 options=[n for n in sorted(STAFF_PINS.keys()) if n != driver],
+                key=f"van_passengers_{van_nonce}",
             )
+
             submitted = st.form_submit_button("Sign Out Van", use_container_width=True)
 
         if submitted:
-        passengers_selected = st.session_state.get('van_passengers', passengers) or []
-        if isinstance(passengers_selected, str):
-            passengers_selected = [p.strip() for p in passengers_selected.split(',') if p.strip()]
+            passengers_selected = st.session_state.get(f"van_passengers_{van_nonce}", passengers) or []
+            if isinstance(passengers_selected, str):
+                passengers_selected = [p.strip() for p in passengers_selected.split(",") if p.strip()]
+
             if normalize_pin(driver_code) != normalize_pin(STAFF_PINS.get(driver, "")):
                 st.error("Wrong driver code.")
                 return
@@ -403,7 +408,7 @@ def page_vans():
 
             row = {
                 "id": str(uuid.uuid4())[:8],
-                "timestamp": datetime.now(CAMP_TZ).isoformat(timespec="seconds"),
+                "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
                 "van": available,
                 "driver": driver,
                 "purpose": purpose,
@@ -413,8 +418,10 @@ def page_vans():
                 "status": "OUT",
             }
             append_vans_row(row)
+
+            # Reset form by bumping nonce (avoids Streamlit session_state mutation errors)
+            st.session_state["van_form_nonce"] += 1
             st.session_state["van_flash"] = f"{available} signed out under {driver}."
-            st.session_state["van_reset"] = True
             st.rerun()
 
     # SIGN IN (only if a van is out)
@@ -454,7 +461,7 @@ def page_vans():
 
             row = {
                 "id": str(uuid.uuid4())[:8],
-                "timestamp": datetime.now(CAMP_TZ).isoformat(timespec="seconds"),
+                "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
                 "van": van_to_in,
                 "driver": return_driver,
                 "purpose": last_purpose,
@@ -628,6 +635,42 @@ def page_admin_history():
         file_name="signout_log.csv",
         mime="text/csv",
     )
+
+    # -----------------------------
+    # Van Log History
+    # -----------------------------
+    df_vans = load_vans_df_cached()
+    if df_vans is None or df_vans.empty:
+        st.subheader("Van Log History")
+        st.info("No van logs recorded yet.")
+    else:
+        st.subheader("Van Log History")
+        dfv = df_vans.copy()
+        if "timestamp" in dfv.columns:
+            dfv["timestamp"] = pd.to_datetime(dfv["timestamp"], errors="coerce")
+            dfv["timestamp_str"] = dfv["timestamp"].apply(format_time)
+        else:
+            dfv["timestamp_str"] = ""
+        dfv = dfv.rename(columns={
+            "id": "ID",
+            "timestamp_str": "Time",
+            "van": "Van",
+            "driver": "Driver",
+            "purpose": "Purpose",
+            "passengers": "Passengers",
+            "other_purpose": "Other Purpose",
+            "action": "Action",
+            "status": "Status",
+        })
+        cols = [c for c in ["ID","Time","Van","Driver","Purpose","Passengers","Other Purpose","Action","Status"] if c in dfv.columns]
+        st.dataframe(dfv[cols], use_container_width=True)
+        st.download_button(
+            "Download Van Log as CSV",
+            data=dfv[cols].to_csv(index=False),
+            file_name="van_log.csv",
+            mime="text/csv",
+        )
+
 
     st.markdown("---")
 
