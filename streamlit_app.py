@@ -543,33 +543,39 @@ def page_vans(staff_pins: dict, staff_names: list[str], driver_names: list[str])
             )
 
     st.divider()
-    st.subheader("Sign Out a Van")
+   st.subheader("Sign Out a Van")
 
-    if available is None:
-        st.warning("No vans available. All vans are currently out.")
-    else:
-        st.info(f"Next available: **{available}**")
+if available is None:
+    st.warning("No vans available. All vans are currently out.")
+    return
 
-        with st.form("van_signout_form", clear_on_submit=False):
-            if not driver_names:
-                st.warning("No eligible drivers found (drivers sheet passed_test=TRUE).")
-                st.stop()
+st.info(f"Next available: **{available}**")
 
-            driver = st.selectbox("Driver (must be driving-tested)", options=driver_names, key=f"van_driver_{van_nonce}")
-            driver_code = st.text_input("Driver 4-digit code", type="password", key=f"van_driver_code_{van_nonce}")
-            purpose = st.selectbox("Purpose", VAN_PURPOSES, key=f"van_purpose_{van_nonce}")
+# ✅ Move this check OUTSIDE the form
+if not driver_names:
+    st.warning("No eligible drivers found. Set drivers.passed_test=TRUE for cleared drivers.")
+    return
 
-            other_purpose = ""
-            if purpose == "Other":
-                other_purpose = st.text_input("Other purpose (required)", key=f"van_other_purpose_{van_nonce}")
+with st.form("van_signout_form", clear_on_submit=False):
+    driver = st.selectbox(
+        "Driver (must be driving-tested)",
+        options=driver_names,
+        key=f"van_driver_{van_nonce}"
+    )
+    driver_code = st.text_input("Driver 4-digit code", type="password", key=f"van_driver_code_{van_nonce}")
+    purpose = st.selectbox("Purpose", VAN_PURPOSES, key=f"van_purpose_{van_nonce}")
 
-            passengers = st.multiselect(
-                "Passengers (select everyone riding with the driver)",
-                options=staff_names,
-                key=f"van_passengers_{van_nonce}",
-            )
+    other_purpose = ""
+    if purpose == "Other":
+        other_purpose = st.text_input("Other purpose (required)", key=f"van_other_purpose_{van_nonce}")
 
-            submitted = st.form_submit_button("Sign Out Van", use_container_width=True)
+    passengers = st.multiselect(
+        "Passengers (select everyone riding with the driver)",
+        options=staff_names,
+        key=f"van_passengers_{van_nonce}",
+    )
+
+    submitted = st.form_submit_button("Sign Out Van", use_container_width=True)
 
         if submitted:
             passengers_selected = st.session_state.get(f"van_passengers_{van_nonce}", passengers) or []
