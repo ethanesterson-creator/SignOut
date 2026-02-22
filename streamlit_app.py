@@ -577,7 +577,7 @@ with st.form("van_signout_form", clear_on_submit=False):
 
     submitted = st.form_submit_button("Sign Out Van", use_container_width=True)
 
-        if submitted:
+    if submitted:
             passengers_selected = st.session_state.get(f"van_passengers_{van_nonce}", passengers) or []
             passengers_selected = [p for p in passengers_selected if p != driver]
 
