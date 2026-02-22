@@ -543,7 +543,7 @@ def page_vans(staff_pins: dict, staff_names: list[str], driver_names: list[str])
             )
 
     st.divider()
-   st.subheader("Sign Out a Van")
+st.subheader("Sign Out a Van")
 
 if available is None:
     st.warning("No vans available. All vans are currently out.")
