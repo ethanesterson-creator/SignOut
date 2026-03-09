@@ -632,7 +632,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
         van_to_in = out_vans[0] if len(out_vans) == 1 else st.selectbox("Which van is returning?", out_vans)
 
         with st.form("van_signin_form", clear_on_submit=True):
-            return_driver = st.selectbox("Driver returning the van", options=staff_names)
+            return_driver = st.selectbox("Driver returning the van", options=driver_names)
             return_driver_code = st.text_input("Driver 4-digit code", type="password")
             submitted_in = st.form_submit_button("Sign In Van", use_container_width=True)
 
