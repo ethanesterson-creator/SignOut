@@ -313,14 +313,14 @@ def load_days_off_df_cached():
 
 def maybe_auto_day_off_signouts(staff_pins: dict):
     """
-    Sync automatic day-off status on every refresh.
+    Sync automatic day-off status without fighting manual sign-ins.
 
-    What this does:
-    1. Signs IN anyone whose latest OUT row was an old AUTO_DAY_OFF row
-       and who is not scheduled for today.
-    2. Signs OUT anyone scheduled for today's weekday who is not already out.
-    3. Leaves manual sign-outs alone. It will NOT auto-sign-in someone who went
-       out manually for Night Off, Period Off, Other, etc.
+    Camp-realistic behavior:
+    1. If someone's latest OUT row is an old AUTO_DAY_OFF row, sign them IN.
+    2. If someone is assigned to today's day off and has NOT already received
+       today's automatic day-off OUT row, sign them OUT once.
+    3. If they manually sign IN later that same day, leave them IN.
+    4. Manual sign-outs (Night Off, Period Off, Other, etc.) are never touched.
     """
     now = datetime.now(TZ)
     today_weekday = normalize_weekday(now.strftime("%A"))
@@ -328,7 +328,6 @@ def maybe_auto_day_off_signouts(staff_pins: dict):
     tag_today = f"{AUTO_DAY_OFF_TAG_PREFIX}|{today_str}"
 
     df_days = load_days_off_df_cached()
-
     if df_days.empty:
         names_today = []
     else:
@@ -342,14 +341,26 @@ def maybe_auto_day_off_signouts(staff_pins: dict):
     df_logs = load_logs_df_cached()
     df_out = get_currently_out(df_logs)
 
-    if df_out.empty:
-        currently_out = set()
-    else:
-        currently_out = set(df_out["name"].tolist())
+    currently_out = set(df_out["name"].tolist()) if not df_out.empty else set()
 
-        # Clean up stale automatic day-off OUT rows.
-        # If someone is OUT only because of an AUTO_DAY_OFF tag from a past day,
-        # or they are no longer assigned to today's day off list, sign them back IN.
+    # Track who already got an AUTO_DAY_OFF row today.
+    # This is the key fix: if they sign back IN after that, the app should not
+    # auto-sign them OUT again on the next refresh.
+    already_auto_out_today = set()
+    if not df_logs.empty:
+        tmp_today = df_logs.copy()
+        tmp_today["timestamp"] = pd.to_datetime(tmp_today["timestamp"], errors="coerce")
+        tmp_today = tmp_today[
+            (tmp_today["timestamp"].dt.date == now.date()) &
+            (tmp_today["other_reason"].astype(str) == tag_today) &
+            (tmp_today["action"].astype(str).str.upper() == "OUT")
+        ]
+        already_auto_out_today = set(tmp_today["name"].astype(str).str.strip().tolist())
+
+    # Clean up stale automatic day-off OUT rows.
+    # If someone is OUT only because of an AUTO_DAY_OFF tag from a past day,
+    # or they are no longer assigned to today's day-off list, sign them back IN.
+    if not df_out.empty:
         for _, row in df_out.iterrows():
             name = str(row.get("name", "")).strip()
             other_reason = str(row.get("other_reason", "")).strip()
@@ -377,17 +388,25 @@ def maybe_auto_day_off_signouts(staff_pins: dict):
     if now.hour < AUTO_DAY_OFF_START_HOUR:
         return
 
-    # Add today's automatic day-off OUT rows for staff who are not already out.
+    # Add today's automatic day-off OUT rows exactly ONCE per person per day.
+    # If the person later signs IN manually, they stay IN.
     for name in names_today:
-        if name in staff_pins and name not in currently_out:
-            append_log_row(
-                name,
-                "Day Off",
-                tag_today,
-                action="OUT",
-                status="OUT",
-            )
-            currently_out.add(name)
+        if name not in staff_pins:
+            continue
+        if name in currently_out:
+            continue
+        if name in already_auto_out_today:
+            continue
+
+        append_log_row(
+            name,
+            "Day Off",
+            tag_today,
+            action="OUT",
+            status="OUT",
+        )
+        currently_out.add(name)
+
 
 
 # =================================================
