@@ -313,41 +313,82 @@ def load_days_off_df_cached():
 
 def maybe_auto_day_off_signouts(staff_pins: dict):
     """
-    If today matches entries in days_off tab, ensure those staff have an OUT entry
-    for today tagged with AUTO_DAY_OFF|YYYY-MM-DD (so refresh doesn't duplicate).
+    Sync automatic day-off status on every refresh.
+
+    What this does:
+    1. Signs IN anyone whose latest OUT row was an old AUTO_DAY_OFF row
+       and who is not scheduled for today.
+    2. Signs OUT anyone scheduled for today's weekday who is not already out.
+    3. Leaves manual sign-outs alone. It will NOT auto-sign-in someone who went
+       out manually for Night Off, Period Off, Other, etc.
     """
     now = datetime.now(TZ)
-    if now.hour < AUTO_DAY_OFF_START_HOUR:
-        return
-
     today_weekday = normalize_weekday(now.strftime("%A"))
     today_str = now.date().isoformat()
     tag_today = f"{AUTO_DAY_OFF_TAG_PREFIX}|{today_str}"
 
     df_days = load_days_off_df_cached()
-    if df_days.empty:
-        return
 
-    names_today = df_days[(df_days["active"]) & (df_days["weekday"] == today_weekday)]["name"].tolist()
-    if not names_today:
-        return
+    if df_days.empty:
+        names_today = []
+    else:
+        names_today = df_days[
+            (df_days["active"]) &
+            (df_days["weekday"] == today_weekday)
+        ]["name"].tolist()
+
+    names_today_set = set(names_today)
 
     df_logs = load_logs_df_cached()
-
-    # Already ran today?
-    if not df_logs.empty:
-        tmp = df_logs.copy()
-        tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
-        tmp = tmp[tmp["timestamp"].dt.date == now.date()]
-        if "other_reason" in tmp.columns and (tmp["other_reason"].astype(str) == tag_today).any():
-            return
-
     df_out = get_currently_out(df_logs)
-    currently_out = set(df_out["name"].tolist()) if not df_out.empty else set()
 
-    for n in names_today:
-        if n in staff_pins and n not in currently_out:
-            append_log_row(n, "Day Off", tag_today, action="OUT", status="OUT")
+    if df_out.empty:
+        currently_out = set()
+    else:
+        currently_out = set(df_out["name"].tolist())
+
+        # Clean up stale automatic day-off OUT rows.
+        # If someone is OUT only because of an AUTO_DAY_OFF tag from a past day,
+        # or they are no longer assigned to today's day off list, sign them back IN.
+        for _, row in df_out.iterrows():
+            name = str(row.get("name", "")).strip()
+            other_reason = str(row.get("other_reason", "")).strip()
+
+            if not other_reason.startswith(f"{AUTO_DAY_OFF_TAG_PREFIX}|"):
+                continue
+
+            should_still_be_auto_out = (
+                other_reason == tag_today and
+                name in names_today_set
+            )
+
+            if not should_still_be_auto_out:
+                append_log_row(
+                    name,
+                    row.get("reason", "Day Off"),
+                    other_reason,
+                    action="IN",
+                    status="IN",
+                )
+                currently_out.discard(name)
+
+    # Do not auto-sign today's day-off staff OUT until the configured start hour.
+    # Old auto rows still get cleaned up above even before this hour.
+    if now.hour < AUTO_DAY_OFF_START_HOUR:
+        return
+
+    # Add today's automatic day-off OUT rows for staff who are not already out.
+    for name in names_today:
+        if name in staff_pins and name not in currently_out:
+            append_log_row(
+                name,
+                "Day Off",
+                tag_today,
+                action="OUT",
+                status="OUT",
+            )
+            currently_out.add(name)
+
 
 # =================================================
 # VANS HELPERS
@@ -514,6 +555,14 @@ def page_whos_out():
         return
 
     df_display = df_out.copy()
+
+    # Make auto day-off rows cleaner on the public board.
+    df_display["other_reason"] = df_display["other_reason"].astype(str)
+    df_display.loc[
+        df_display["other_reason"].str.startswith(f"{AUTO_DAY_OFF_TAG_PREFIX}|", na=False),
+        "other_reason"
+    ] = ""
+
     df_display["When"] = df_display["timestamp"].apply(format_time)
     df_display = df_display.rename(columns={
         "name": "Name",
