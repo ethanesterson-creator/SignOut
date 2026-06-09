@@ -98,7 +98,21 @@ section[data-testid="stSidebar"] {{
 }}
 section[data-testid="stSidebar"] * {{
     color: {WHITE} !important;
+}}
+section[data-testid="stSidebar"] p,
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] span:not([data-testid="stIconMaterial"]),
+section[data-testid="stSidebar"] div[role="radiogroup"] {{
     font-family: 'Public Sans', sans-serif;
+}}
+/* Streamlit icons are ligatures in the Material Symbols font.
+   Restore the icon font so names like keyboard_double_arrow_left
+   render as glyphs, not text. */
+section[data-testid="stSidebar"] [data-testid="stIconMaterial"],
+[data-testid="stIconMaterial"],
+.material-symbols-rounded,
+.material-symbols-outlined {{
+    font-family: 'Material Symbols Rounded' !important;
 }}
 section[data-testid="stSidebar"] .stRadio label p {{
     font-size: 1.02rem;
