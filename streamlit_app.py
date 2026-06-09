@@ -1226,7 +1226,6 @@ def main():
     with st.sidebar.expander("Kiosk Settings", expanded=False):
         auto_refresh_on = st.checkbox("Auto-refresh kiosk", value=True)
         refresh_seconds = st.slider("Refresh every (seconds)", 10, 120, 30, step=5)
-        st.caption("Auto-refresh only runs on Who's Out and Vans, so a refresh never wipes a code mid-entry on the sign-out form.")
 
     # Refresh only the display pages. The Sign In / Out and Admin pages
     # never auto-refresh, so typing is never interrupted.
