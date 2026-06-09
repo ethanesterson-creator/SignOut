@@ -1,9 +1,11 @@
-import streamlit as st
-import pandas as pd
+import html as html_lib
+import uuid
 from datetime import datetime
 from pathlib import Path
+
+import pandas as pd
 import pytz
-import uuid
+import streamlit as st
 
 import gspread
 from gspread.exceptions import APIError, GSpreadException
@@ -23,7 +25,7 @@ SHEET_LOGS = "logs"
 SHEET_VANS = "vans"
 SHEET_STAFF = "staff"
 SHEET_DRIVERS = "drivers"
-SHEET_DAYS_OFF = "days_off"  # optional tab; create to enable auto day-off sign-outs
+SHEET_DAYS_OFF = "days_off"  # optional tab; used for the Day Off board (display only)
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -32,9 +34,9 @@ REASONS = ["Day Off", "Period Off", "Night Off", "Other (type reason)"]
 VANS = ["Van 1", "Van 2", "Van 3"]
 VAN_PURPOSES = ["Period Off", "Night Off", "Day Off", "Field Trip", "Tournament", "Other"]
 
-# Auto Day Off behavior
-AUTO_DAY_OFF_TAG_PREFIX = "AUTO_DAY_OFF"  # we append today's date to prevent duplicates
-AUTO_DAY_OFF_START_HOUR = 7  # local time; adjust if you want auto-outs to start later
+# Legacy tag from the old auto day-off feature. Kept only so old rows
+# display cleanly on the board. The app no longer writes these rows.
+LEGACY_AUTO_TAG_PREFIX = "AUTO_DAY_OFF"
 
 # Vans sheet required headers
 VANS_HEADERS_REQUIRED = [
@@ -44,6 +46,311 @@ VANS_HEADERS_REQUIRED = [
 
 # Logs sheet required headers
 LOGS_HEADERS_REQUIRED = ["id", "timestamp", "name", "reason", "other_reason", "action", "status"]
+
+# Pages that auto-refresh for the Big House kiosk. The sign-out form is
+# excluded on purpose so a refresh never wipes a PIN mid-entry.
+KIOSK_PAGES = {"Who's Out", "Vans"}
+
+# =================================================
+# THEME / CSS
+# =================================================
+NAVY = "#13294B"
+NAVY_DEEP = "#0B1B33"
+NAVY_SOFT = "#1E3A66"
+CLOUD = "#F5F7FA"
+LINE = "#D8DFE9"
+MIST = "#5C6B82"
+WHITE = "#FFFFFF"
+
+APP_CSS = f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Public+Sans:wght@400;500;600;700&display=swap');
+
+:root {{
+    --navy: {NAVY};
+    --navy-deep: {NAVY_DEEP};
+    --navy-soft: {NAVY_SOFT};
+    --cloud: {CLOUD};
+    --line: {LINE};
+    --mist: {MIST};
+}}
+
+/* ---------- base ---------- */
+.stApp {{
+    background: var(--cloud);
+    font-family: 'Public Sans', sans-serif;
+    color: var(--navy-deep);
+}}
+
+#MainMenu, footer {{ visibility: hidden; }}
+header[data-testid="stHeader"] {{ background: transparent; }}
+
+h1, h2, h3, .stApp h1, .stApp h2, .stApp h3 {{
+    font-family: 'Archivo', sans-serif;
+    color: var(--navy);
+    letter-spacing: -0.01em;
+}}
+
+/* ---------- sidebar ---------- */
+section[data-testid="stSidebar"] {{
+    background: var(--navy);
+    border-right: 4px solid var(--navy-deep);
+}}
+section[data-testid="stSidebar"] * {{
+    color: {WHITE} !important;
+    font-family: 'Public Sans', sans-serif;
+}}
+section[data-testid="stSidebar"] .stRadio label p {{
+    font-size: 1.02rem;
+    font-weight: 600;
+}}
+section[data-testid="stSidebar"] hr {{
+    border-color: var(--navy-soft);
+}}
+section[data-testid="stSidebar"] [data-testid="stExpander"] {{
+    background: var(--navy-soft);
+    border-radius: 10px;
+    border: none;
+}}
+
+/* ---------- buttons ---------- */
+.stButton > button, .stFormSubmitButton > button {{
+    background: var(--navy);
+    color: {WHITE};
+    border: none;
+    border-radius: 8px;
+    font-family: 'Archivo', sans-serif;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    padding: 0.55rem 1.4rem;
+    transition: background 0.15s ease;
+}}
+.stButton > button:hover, .stFormSubmitButton > button:hover {{
+    background: var(--navy-soft);
+    color: {WHITE};
+}}
+.stDownloadButton > button {{
+    background: {WHITE};
+    color: var(--navy);
+    border: 1.5px solid var(--navy);
+    border-radius: 8px;
+    font-weight: 700;
+}}
+
+/* ---------- inputs ---------- */
+.stTextInput input, .stSelectbox [data-baseweb="select"] > div,
+.stMultiSelect [data-baseweb="select"] > div {{
+    background: {WHITE};
+    border-radius: 8px;
+    border-color: var(--line);
+}}
+
+/* ---------- forms ---------- */
+[data-testid="stForm"] {{
+    background: {WHITE};
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 1.4rem 1.4rem 1.1rem 1.4rem;
+}}
+
+/* ---------- custom components ---------- */
+.bc-eyebrow {{
+    font-family: 'Archivo', sans-serif;
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--mist);
+    margin-bottom: 0.15rem;
+}}
+.bc-pagetitle {{
+    font-family: 'Archivo', sans-serif;
+    font-size: 2rem;
+    font-weight: 800;
+    color: var(--navy);
+    margin: 0 0 1.1rem 0;
+    line-height: 1.1;
+}}
+.bc-sectiontitle {{
+    font-family: 'Archivo', sans-serif;
+    font-size: 1.15rem;
+    font-weight: 800;
+    color: var(--navy);
+    margin: 0 0 0.7rem 0;
+}}
+
+.bc-grid {{
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 0.85rem;
+    margin-bottom: 0.5rem;
+}}
+
+.bc-card {{
+    background: {WHITE};
+    border: 1px solid var(--line);
+    border-top: 4px solid var(--navy);
+    border-radius: 12px;
+    padding: 0.95rem 1.05rem;
+    box-shadow: 0 1px 3px rgba(11, 27, 51, 0.06);
+}}
+.bc-card .bc-name {{
+    font-family: 'Archivo', sans-serif;
+    font-size: 1.18rem;
+    font-weight: 800;
+    color: var(--navy-deep);
+    margin-bottom: 0.35rem;
+}}
+.bc-card .bc-meta {{
+    font-size: 0.92rem;
+    color: var(--mist);
+    line-height: 1.45;
+}}
+.bc-card .bc-time {{
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    color: var(--navy);
+}}
+
+.bc-chip {{
+    display: inline-block;
+    background: var(--navy);
+    color: {WHITE};
+    font-family: 'Archivo', sans-serif;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border-radius: 999px;
+    padding: 0.18rem 0.65rem;
+    margin-bottom: 0.45rem;
+}}
+.bc-chip.bc-chip-light {{
+    background: var(--cloud);
+    color: var(--navy);
+    border: 1px solid var(--line);
+}}
+
+.bc-dayoff-row {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}}
+.bc-dayoff {{
+    background: {WHITE};
+    border: 1.5px solid var(--navy);
+    color: var(--navy);
+    font-family: 'Archivo', sans-serif;
+    font-weight: 700;
+    font-size: 0.95rem;
+    border-radius: 999px;
+    padding: 0.35rem 1rem;
+}}
+
+.bc-van-card {{
+    background: {WHITE};
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 1rem 1.1rem;
+    box-shadow: 0 1px 3px rgba(11, 27, 51, 0.06);
+}}
+.bc-van-card.bc-van-out {{
+    background: var(--navy);
+    border-color: var(--navy-deep);
+}}
+.bc-van-card .bc-van-title {{
+    font-family: 'Archivo', sans-serif;
+    font-size: 1.25rem;
+    font-weight: 800;
+    color: var(--navy);
+    margin-bottom: 0.3rem;
+}}
+.bc-van-card.bc-van-out .bc-van-title,
+.bc-van-card.bc-van-out .bc-meta {{
+    color: {WHITE};
+}}
+.bc-van-card.bc-van-out .bc-meta strong {{
+    color: {WHITE};
+}}
+.bc-van-card .bc-meta {{
+    font-size: 0.93rem;
+    color: var(--mist);
+    line-height: 1.5;
+}}
+.bc-van-status {{
+    display: inline-block;
+    font-family: 'Archivo', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    border-radius: 999px;
+    padding: 0.16rem 0.6rem;
+    margin-bottom: 0.4rem;
+}}
+.bc-van-status.in {{
+    background: var(--cloud);
+    color: var(--navy);
+    border: 1px solid var(--line);
+}}
+.bc-van-status.out {{
+    background: {WHITE};
+    color: var(--navy);
+}}
+
+.bc-empty {{
+    background: {WHITE};
+    border: 1px dashed var(--line);
+    border-radius: 12px;
+    padding: 1.1rem 1.2rem;
+    color: var(--mist);
+    font-size: 0.97rem;
+}}
+
+.bc-footer {{
+    margin-top: 2.5rem;
+    padding-top: 0.8rem;
+    border-top: 1px solid var(--line);
+    font-family: 'Archivo', sans-serif;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--mist);
+    text-align: center;
+}}
+</style>
+"""
+
+
+def inject_css():
+    st.markdown(APP_CSS, unsafe_allow_html=True)
+
+
+def esc(s) -> str:
+    return html_lib.escape(str(s or "").strip())
+
+
+def page_title(eyebrow: str, title: str):
+    st.markdown(
+        f"<div class='bc-eyebrow'>{esc(eyebrow)}</div>"
+        f"<div class='bc-pagetitle'>{esc(title)}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def section_title(title: str):
+    st.markdown(f"<div class='bc-sectiontitle'>{esc(title)}</div>", unsafe_allow_html=True)
+
+
+def empty_note(text: str):
+    st.markdown(f"<div class='bc-empty'>{esc(text)}</div>", unsafe_allow_html=True)
+
+
+def crest_footer():
+    st.markdown(
+        "<div class='bc-footer'>Camp Bauercrest &middot; Amesbury, MA &middot; Est. 1931</div>",
+        unsafe_allow_html=True,
+    )
 
 # =================================================
 # SMALL UTILS
@@ -56,10 +363,24 @@ def normalize_pin(pin: str) -> str:
 
 
 def format_time(dt):
+    """Full timestamp for admin tables."""
     if pd.isna(dt):
         return ""
     try:
         return dt.strftime("%Y-%m-%d %I:%M %p")
+    except Exception:
+        return str(dt)
+
+
+def format_board_time(dt):
+    """Short timestamp for the public board: time only if today, else day + time."""
+    if pd.isna(dt):
+        return ""
+    try:
+        now = datetime.now(TZ)
+        if dt.date() == now.date():
+            return dt.strftime("%I:%M %p").lstrip("0")
+        return dt.strftime("%a %I:%M %p").replace(" 0", " ")
     except Exception:
         return str(dt)
 
@@ -207,19 +528,26 @@ def clear_logs_cache():
 
 
 def append_log_row(name: str, reason: str, other_reason: str, action: str, status: str):
+    """Write a log row mapped to the sheet's actual header order.
+
+    Mapping by header (instead of fixed position) keeps rows aligned even if
+    someone reorders columns in Google Sheets.
+    """
     try:
         sheet = get_worksheet(SHEET_LOGS)
         ensure_logs_header(sheet)
 
-        row = [
-            str(uuid.uuid4())[:8],
-            datetime.now(TZ).isoformat(timespec="seconds"),
-            name,
-            reason,
-            other_reason or "",
-            action,
-            status,
-        ]
+        row_dict = {
+            "id": str(uuid.uuid4())[:8],
+            "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
+            "name": name,
+            "reason": reason,
+            "other_reason": other_reason or "",
+            "action": action,
+            "status": status,
+        }
+        headers = [h.strip() for h in sheet.row_values(1) if str(h).strip()]
+        row = [row_dict.get(h, "") for h in headers]
         sheet.append_row(row)
         clear_logs_cache()
     except (APIError, GSpreadException):
@@ -286,7 +614,7 @@ def get_currently_out(df: pd.DataFrame) -> pd.DataFrame:
     return out_rows[["name", "reason", "other_reason", "timestamp"]]
 
 # =================================================
-# DAYS OFF AUTO SIGN-OUT (ANY WEEKDAY) - OPTIONAL
+# DAYS OFF (DISPLAY ONLY)
 # =================================================
 @st.cache_data(ttl=60)
 def load_days_off_df_cached():
@@ -311,103 +639,25 @@ def load_days_off_df_cached():
     return df
 
 
-def maybe_auto_day_off_signouts(staff_pins: dict):
-    """
-    Sync automatic day-off status without fighting manual sign-ins.
+def get_day_off_names_today() -> list:
+    """Names scheduled for a day off today, from the days_off sheet.
 
-    Camp-realistic behavior:
-    1. If someone's latest OUT row is an old AUTO_DAY_OFF row, sign them IN.
-    2. If someone is assigned to today's day off and has NOT already received
-       today's automatic day-off OUT row, sign them OUT once.
-    3. If they manually sign IN later that same day, leave them IN.
-    4. Manual sign-outs (Night Off, Period Off, Other, etc.) are never touched.
+    Display only. The app never signs anyone out automatically; counselors
+    still sign out at the Big House like everyone else.
     """
     now = datetime.now(TZ)
     today_weekday = normalize_weekday(now.strftime("%A"))
-    today_str = now.date().isoformat()
-    tag_today = f"{AUTO_DAY_OFF_TAG_PREFIX}|{today_str}"
 
     df_days = load_days_off_df_cached()
     if df_days.empty:
-        names_today = []
-    else:
-        names_today = df_days[
-            (df_days["active"]) &
-            (df_days["weekday"] == today_weekday)
-        ]["name"].tolist()
+        return []
 
-    names_today_set = set(names_today)
+    names = df_days[
+        (df_days["active"]) &
+        (df_days["weekday"] == today_weekday)
+    ]["name"].tolist()
 
-    df_logs = load_logs_df_cached()
-    df_out = get_currently_out(df_logs)
-
-    currently_out = set(df_out["name"].tolist()) if not df_out.empty else set()
-
-    # Track who already got an AUTO_DAY_OFF row today.
-    # This is the key fix: if they sign back IN after that, the app should not
-    # auto-sign them OUT again on the next refresh.
-    already_auto_out_today = set()
-    if not df_logs.empty:
-        tmp_today = df_logs.copy()
-        tmp_today["timestamp"] = pd.to_datetime(tmp_today["timestamp"], errors="coerce")
-        tmp_today = tmp_today[
-            (tmp_today["timestamp"].dt.date == now.date()) &
-            (tmp_today["other_reason"].astype(str) == tag_today) &
-            (tmp_today["action"].astype(str).str.upper() == "OUT")
-        ]
-        already_auto_out_today = set(tmp_today["name"].astype(str).str.strip().tolist())
-
-    # Clean up stale automatic day-off OUT rows.
-    # If someone is OUT only because of an AUTO_DAY_OFF tag from a past day,
-    # or they are no longer assigned to today's day-off list, sign them back IN.
-    if not df_out.empty:
-        for _, row in df_out.iterrows():
-            name = str(row.get("name", "")).strip()
-            other_reason = str(row.get("other_reason", "")).strip()
-
-            if not other_reason.startswith(f"{AUTO_DAY_OFF_TAG_PREFIX}|"):
-                continue
-
-            should_still_be_auto_out = (
-                other_reason == tag_today and
-                name in names_today_set
-            )
-
-            if not should_still_be_auto_out:
-                append_log_row(
-                    name,
-                    row.get("reason", "Day Off"),
-                    other_reason,
-                    action="IN",
-                    status="IN",
-                )
-                currently_out.discard(name)
-
-    # Do not auto-sign today's day-off staff OUT until the configured start hour.
-    # Old auto rows still get cleaned up above even before this hour.
-    if now.hour < AUTO_DAY_OFF_START_HOUR:
-        return
-
-    # Add today's automatic day-off OUT rows exactly ONCE per person per day.
-    # If the person later signs IN manually, they stay IN.
-    for name in names_today:
-        if name not in staff_pins:
-            continue
-        if name in currently_out:
-            continue
-        if name in already_auto_out_today:
-            continue
-
-        append_log_row(
-            name,
-            "Day Off",
-            tag_today,
-            action="OUT",
-            status="OUT",
-        )
-        currently_out.add(name)
-
-
+    return sorted(set(n for n in names if n))
 
 # =================================================
 # VANS HELPERS
@@ -492,15 +742,89 @@ def next_available_van(status_map: dict):
     return None
 
 # =================================================
+# BOARD RENDERING
+# =================================================
+def clean_other_reason(other_reason: str) -> str:
+    """Hide legacy auto day-off tags from public display."""
+    s = str(other_reason or "").strip()
+    if s.startswith(f"{LEGACY_AUTO_TAG_PREFIX}|"):
+        return ""
+    return s
+
+
+def render_out_cards(df_out: pd.DataFrame):
+    cards = []
+    df = df_out.sort_values("timestamp")
+    for _, row in df.iterrows():
+        name = esc(row.get("name", ""))
+        reason = esc(row.get("reason", ""))
+        details = esc(clean_other_reason(row.get("other_reason", "")))
+        when = esc(format_board_time(row.get("timestamp")))
+
+        details_html = f"<div class='bc-meta'>{details}</div>" if details else ""
+        cards.append(
+            f"<div class='bc-card'>"
+            f"<div class='bc-chip'>{reason}</div>"
+            f"<div class='bc-name'>{name}</div>"
+            f"{details_html}"
+            f"<div class='bc-meta'>Signed out at <span class='bc-time'>{when}</span></div>"
+            f"</div>"
+        )
+    st.markdown(f"<div class='bc-grid'>{''.join(cards)}</div>", unsafe_allow_html=True)
+
+
+def render_day_off_chips(names: list):
+    chips = "".join(f"<div class='bc-dayoff'>{esc(n)}</div>" for n in names)
+    st.markdown(f"<div class='bc-dayoff-row'>{chips}</div>", unsafe_allow_html=True)
+
+
+def render_van_cards(status_map: dict):
+    cards = []
+    for v in VANS:
+        info = status_map.get(v, {"status": "IN"})
+        out = info.get("status") == "OUT"
+
+        if out:
+            purpose = info.get("purpose", "")
+            if purpose == "Other" and info.get("other_purpose"):
+                purpose = f"Other: {info.get('other_purpose')}"
+            passengers = info.get("passengers", "")
+            passengers_html = (
+                f"<div class='bc-meta'>Passengers: {esc(passengers)}</div>" if passengers else ""
+            )
+            cards.append(
+                f"<div class='bc-van-card bc-van-out'>"
+                f"<div class='bc-van-status out'>OUT</div>"
+                f"<div class='bc-van-title'>{esc(v)}</div>"
+                f"<div class='bc-meta'>Driver: <strong>{esc(info.get('driver', ''))}</strong></div>"
+                f"<div class='bc-meta'>Purpose: {esc(purpose)}</div>"
+                f"{passengers_html}"
+                f"</div>"
+            )
+        else:
+            cards.append(
+                f"<div class='bc-van-card'>"
+                f"<div class='bc-van-status in'>IN</div>"
+                f"<div class='bc-van-title'>{esc(v)}</div>"
+                f"<div class='bc-meta'>Parked at camp</div>"
+                f"</div>"
+            )
+    st.markdown(f"<div class='bc-grid'>{''.join(cards)}</div>", unsafe_allow_html=True)
+
+# =================================================
 # PAGES
 # =================================================
 def page_sign_in_out(staff_pins: dict, staff_names: list):
-    st.header("Staff Sign-Out / Sign-In")
+    page_title("Camp Bauercrest Staff", "Sign Out / Sign In")
+
+    flash = st.session_state.pop("log_flash", "")
+    if flash:
+        st.success(flash)
 
     df_logs = load_logs_df_cached()
     df_out = get_currently_out(df_logs)
 
-    st.subheader("Sign Out")
+    section_title("Sign Out")
     col1, col2 = st.columns(2)
     with col1:
         name = st.selectbox("Your name", [""] + staff_names, index=0, key="signout_name")
@@ -531,16 +855,18 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
             st.error(f"{name} is already signed out.")
         else:
             append_log_row(name, reason, other_reason, action="OUT", status="OUT")
-            st.success(f"{name} signed OUT successfully.")
+            st.session_state["log_flash"] = f"{name} signed OUT successfully."
+            st.rerun()
 
     st.markdown("---")
 
-    st.subheader("Sign In")
+    section_title("Sign In")
     df_logs = load_logs_df_cached()
     df_out = get_currently_out(df_logs)
 
     if df_out.empty:
-        st.info("No one is currently signed out.")
+        empty_note("No one is currently signed out.")
+        crest_footer()
         return
 
     out_names = sorted(df_out["name"].tolist())
@@ -560,40 +886,37 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
         else:
             row = df_out[df_out["name"] == name_in].iloc[0]
             append_log_row(name_in, row["reason"], row["other_reason"], action="IN", status="IN")
-            st.success(f"{name_in} signed IN successfully.")
+            st.session_state["log_flash"] = f"{name_in} signed IN successfully."
+            st.rerun()
+
+    crest_footer()
 
 
 def page_whos_out():
-    st.header("Who’s Out Right Now?")
+    page_title("The Big House Board", "Who's Out Right Now")
 
     df_logs = load_logs_df_cached()
     df_out = get_currently_out(df_logs)
 
     if df_out.empty:
-        st.info("No staff are currently out.")
-        return
+        empty_note("No staff are currently signed out.")
+    else:
+        render_out_cards(df_out)
 
-    df_display = df_out.copy()
+    # Day Off board (display only). Reads the days_off sheet. The app never
+    # signs anyone out automatically; this is a reminder of who is scheduled.
+    day_off_names = get_day_off_names_today()
+    if day_off_names:
+        st.markdown("")
+        section_title(f"Day Off Today ({datetime.now(TZ).strftime('%A')})")
+        render_day_off_chips(day_off_names)
+        st.caption("Scheduled days off from the days_off sheet. Everyone still signs out and in at the Big House.")
 
-    # Make auto day-off rows cleaner on the public board.
-    df_display["other_reason"] = df_display["other_reason"].astype(str)
-    df_display.loc[
-        df_display["other_reason"].str.startswith(f"{AUTO_DAY_OFF_TAG_PREFIX}|", na=False),
-        "other_reason"
-    ] = ""
-
-    df_display["When"] = df_display["timestamp"].apply(format_time)
-    df_display = df_display.rename(columns={
-        "name": "Name",
-        "reason": "Reason",
-        "other_reason": "Other Details",
-    })
-    df_display = df_display[["Name", "Reason", "Other Details", "When"]]
-    st.dataframe(df_display, use_container_width=True)
+    crest_footer()
 
 
 def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
-    st.header("Vans")
+    page_title("Camp Vehicles", "Vans")
 
     if "van_form_nonce" not in st.session_state:
         st.session_state["van_form_nonce"] = 0
@@ -608,22 +931,11 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
     out_vans = [v for v in VANS if status_map.get(v, {}).get("status") == "OUT"]
     available = next_available_van(status_map)
 
-    st.subheader("Vans Out Right Now")
-    if not out_vans:
-        st.info("All vans are currently in.")
-    else:
-        for v in out_vans:
-            info = status_map[v]
-            purpose = info.get("purpose", "")
-            if purpose == "Other" and info.get("other_purpose"):
-                purpose = f"Other: {info.get('other_purpose')}"
-            st.write(
-                f"**{v}** — Driver: **{info.get('driver','')}** | "
-                f"Purpose: **{purpose}** | Passengers: {info.get('passengers','')}"
-            )
+    section_title("Van Status")
+    render_van_cards(status_map)
 
     st.divider()
-    st.subheader("Sign Out a Van")
+    section_title("Sign Out a Van")
 
     if available is None:
         st.warning("No vans available. All vans are currently out.")
@@ -695,7 +1007,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
     # Sign IN section
     if out_vans:
         st.divider()
-        st.subheader("Sign In a Van")
+        section_title("Sign In a Van")
 
         van_to_in = out_vans[0] if len(out_vans) == 1 else st.selectbox("Which van is returning?", out_vans)
 
@@ -741,9 +1053,11 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
             st.session_state["van_flash"] = f"{van_to_in} signed back in under {return_driver}."
             st.rerun()
 
+    crest_footer()
+
 
 def page_admin_history():
-    st.header("Admin / History")
+    page_title("Office Use Only", "Admin / History")
     ADMIN_PASSWORD = st.secrets.get("admin_password", "")
 
     if "admin_authenticated" not in st.session_state:
@@ -772,7 +1086,7 @@ def page_admin_history():
 
     df_logs = load_logs_df_cached()
 
-    st.subheader("Full Log History")
+    section_title("Full Log History")
     if df_logs.empty:
         st.info("No logs recorded yet.")
     else:
@@ -799,7 +1113,7 @@ def page_admin_history():
 
     st.markdown("---")
     df_vans = load_vans_df_cached()
-    st.subheader("Van Log History")
+    section_title("Van Log History")
     if df_vans is None or df_vans.empty:
         st.info("No van logs recorded yet.")
     else:
@@ -832,7 +1146,7 @@ def page_admin_history():
         )
 
     st.markdown("---")
-    st.subheader("Delete Specific Log Entries (for testing / pre-season only)")
+    section_title("Delete Specific Log Entries (for testing / pre-season only)")
 
     if df_logs.empty:
         st.info("No deletable entries.")
@@ -859,7 +1173,7 @@ def page_admin_history():
             st.rerun()
 
     st.markdown("---")
-    st.subheader("Delete ALL Logs (for testing / pre-season only)")
+    section_title("Delete ALL Logs (for testing / pre-season only)")
     st.error("WARNING: This will delete ALL sign-in/out records from Google Sheets.")
 
     confirm_all = st.checkbox("I understand this will permanently delete all logs.", key="admin_confirm_delete_all_logs")
@@ -868,35 +1182,48 @@ def page_admin_history():
         st.success("All logs cleared.")
         st.rerun()
 
+    crest_footer()
+
 # =================================================
 # MAIN
 # =================================================
 def main():
-    st.set_page_config(page_title="Bauercrest Staff Sign-Out", layout="wide")
-    st.sidebar.title("Bauercrest Staff Sign-Out")
+    st.set_page_config(
+        page_title="Bauercrest Staff Sign-Out",
+        page_icon="🏕️",
+        layout="wide",
+    )
+    inject_css()
 
     logo_path = Path("logo-header-2.png")
     if logo_path.exists():
-        st.sidebar.image(str(logo_path), use_column_width=True)
+        st.sidebar.image(str(logo_path), use_container_width=True)
 
+    st.sidebar.title("Staff Sign-Out")
     st.sidebar.caption("Sign in and out with your 4-digit code.")
 
+    page = st.sidebar.radio(
+        "Go to",
+        ["Sign In / Out", "Who's Out", "Vans", "Admin / History"],
+        key="main_page_radio",
+    )
+
+    st.sidebar.markdown("---")
     with st.sidebar.expander("Kiosk Settings", expanded=False):
         auto_refresh_on = st.checkbox("Auto-refresh kiosk", value=True)
         refresh_seconds = st.slider("Refresh every (seconds)", 10, 120, 30, step=5)
-        if auto_refresh_on:
-            kiosk_autorefresh(refresh_seconds)
+        st.caption("Auto-refresh only runs on Who's Out and Vans, so a refresh never wipes a code mid-entry on the sign-out form.")
+
+    # Refresh only the display pages. The Sign In / Out and Admin pages
+    # never auto-refresh, so typing is never interrupted.
+    if auto_refresh_on and page in KIOSK_PAGES:
+        kiosk_autorefresh(refresh_seconds)
 
     staff_pins, staff_names, driver_names = get_staff_pins_and_lists()
 
-    # Optional: auto day-off signouts if days_off tab exists
-    maybe_auto_day_off_signouts(staff_pins)
-
-    page = st.sidebar.radio("Go to", ["Sign In / Out", "Who’s Out", "Vans", "Admin / History"], key="main_page_radio")
-
     if page == "Sign In / Out":
         page_sign_in_out(staff_pins, staff_names)
-    elif page == "Who’s Out":
+    elif page == "Who's Out":
         page_whos_out()
     elif page == "Vans":
         page_vans(staff_pins, staff_names, driver_names)
