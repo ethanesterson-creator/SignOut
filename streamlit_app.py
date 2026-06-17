@@ -29,7 +29,7 @@ SHEET_DAYS_OFF = "days_off"  # optional tab; used for the Day Off board (display
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-REASONS = ["Day Off", "Period Off", "Night Off", "Other (type reason)"]
+REASONS = ["Period Off", "Day Off", "Night Off", "Other (type reason)"]
 
 VANS = ["Van 1", "Van 2", "Van 3"]
 VAN_PURPOSES = ["Period Off", "Night Off", "Day Off", "Field Trip", "Tournament", "Other"]
@@ -400,10 +400,23 @@ def format_board_time(dt):
 
 
 def kiosk_autorefresh(seconds: int):
-    """Simple meta refresh to keep kiosk view fresh."""
+    """Reload the whole page on a timer.
+
+    The old version used a meta-refresh tag inside a Streamlit component.
+    Components render in a sandboxed iframe, so a meta refresh there reloaded
+    only the hidden iframe, not the app. Calling parent.location.reload()
+    from the component reloads the real page, so the board actually updates.
+    """
     if seconds and seconds > 0:
         st.components.v1.html(
-            f"<meta http-equiv='refresh' content='{int(seconds)}'>",
+            f"""
+            <script>
+            setTimeout(function() {{
+                if (window.parent) {{ window.parent.location.reload(); }}
+                else {{ window.location.reload(); }}
+            }}, {int(seconds) * 1000});
+            </script>
+            """,
             height=0,
         )
 
@@ -493,6 +506,32 @@ def get_staff_pins_and_lists():
     driver_names = sorted([n for n in staff_names if n in eligible_driver_names])
 
     return staff_pins, staff_names, driver_names
+
+
+def build_pin_lookup(staff_pins: dict) -> dict:
+    """Map each code to the staff who use it. A list catches shared codes."""
+    lookup = {}
+    for name, pin in staff_pins.items():
+        p = normalize_pin(pin)
+        lookup.setdefault(p, []).append(name)
+    return lookup
+
+
+def resolve_code(code: str, pin_lookup: dict):
+    """Turn a typed code into a single staff name.
+
+    Returns (name, error). Exactly one match returns the name. No match or a
+    shared code returns an error message and no name.
+    """
+    p = normalize_pin(code)
+    if not str(code).strip():
+        return None, "Enter your code."
+    names = pin_lookup.get(p, [])
+    if len(names) == 1:
+        return names[0], None
+    if len(names) == 0:
+        return None, "Code not recognized."
+    return None, "This code is shared by more than one person. Ask the office for a unique code."
 
 # =================================================
 # LOGS SHEET HELPERS
@@ -630,7 +669,7 @@ def get_currently_out(df: pd.DataFrame) -> pd.DataFrame:
 # =================================================
 # DAYS OFF (DISPLAY ONLY)
 # =================================================
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=15)
 def load_days_off_df_cached():
     """Reads days_off sheet if present. If missing, returns empty DF (feature disabled)."""
     try:
@@ -831,6 +870,8 @@ def render_van_cards(status_map: dict):
 def page_sign_in_out(staff_pins: dict, staff_names: list):
     page_title("Camp Bauercrest Staff", "Sign Out / Sign In")
 
+    pin_lookup = build_pin_lookup(staff_pins)
+
     flash = st.session_state.pop("log_flash", "")
     if flash:
         st.success(flash)
@@ -839,9 +880,11 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     df_out = get_currently_out(df_logs)
 
     section_title("Sign Out")
+    st.caption("Type your code. The app knows who you are.")
+
     col1, col2 = st.columns(2)
     with col1:
-        name = st.selectbox("Your name", [""] + staff_names, index=0, key="signout_name")
+        code = st.text_input("Your code", type="password", max_chars=4, key="signout_code")
     with col2:
         reason = st.selectbox("Reason for going out", REASONS, key="signout_reason")
 
@@ -849,23 +892,13 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     if reason == "Other (type reason)":
         other_reason = st.text_input("Type your reason", key="signout_other_reason")
 
-    pin = st.text_input("4-digit code", type="password", max_chars=4, key="signout_pin")
-
-    already_out = False
-    if name and (not df_out.empty) and name in df_out["name"].values:
-        already_out = True
-        st.warning(f"{name} is already signed out. They should sign back in first.")
-
     if st.button("Sign Out", key="signout_button"):
-        if not name:
-            st.error("Please select your name.")
-        elif name not in staff_pins:
-            st.error("Name not recognized (inactive or missing from staff sheet).")
-        elif normalize_pin(pin) != normalize_pin(staff_pins.get(name, "")):
-            st.error("Incorrect code.")
+        name, err = resolve_code(code, pin_lookup)
+        if err:
+            st.error(err)
         elif reason == "Other (type reason)" and not other_reason.strip():
             st.error("Please type a reason for 'Other'.")
-        elif already_out:
+        elif (not df_out.empty) and name in df_out["name"].values:
             st.error(f"{name} is already signed out.")
         else:
             append_log_row(name, reason, other_reason, action="OUT", status="OUT")
@@ -875,6 +908,8 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     st.markdown("---")
 
     section_title("Sign In")
+    st.caption("Type your code to sign back in.")
+
     df_logs = load_logs_df_cached()
     df_out = get_currently_out(df_logs)
 
@@ -883,20 +918,14 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
         crest_footer()
         return
 
-    out_names = sorted(df_out["name"].tolist())
-    col3, col4 = st.columns(2)
-    with col3:
-        name_in = st.selectbox("Who is signing back in?", [""] + out_names, index=0, key="signin_name")
-    with col4:
-        pin_in = st.text_input("4-digit code", type="password", max_chars=4, key="signin_pin")
+    code_in = st.text_input("Your code", type="password", max_chars=4, key="signin_code")
 
     if st.button("Sign In", key="signin_button"):
-        if not name_in:
-            st.error("Please select your name.")
-        elif name_in not in staff_pins:
-            st.error("Name not recognized (inactive or missing from staff sheet).")
-        elif normalize_pin(pin_in) != normalize_pin(staff_pins.get(name_in, "")):
-            st.error("Incorrect code.")
+        name_in, err = resolve_code(code_in, pin_lookup)
+        if err:
+            st.error(err)
+        elif name_in not in df_out["name"].values:
+            st.error(f"{name_in} is not currently signed out.")
         else:
             row = df_out[df_out["name"] == name_in].iloc[0]
             append_log_row(name_in, row["reason"], row["other_reason"], action="IN", status="IN")
@@ -960,15 +989,13 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
         if not driver_names:
             st.warning("No eligible drivers found. Set drivers.passed_test=TRUE for cleared drivers.")
         else:
+            pin_lookup = build_pin_lookup(staff_pins)
             with st.form("van_signout_form", clear_on_submit=False):
-                driver = st.selectbox(
-                    "Driver (must be driving-tested)",
-                    options=driver_names,
-                    key=f"van_driver_{van_nonce}",
-                )
+                st.caption("The driver types their code. Only driving-tested staff are accepted.")
                 driver_code = st.text_input(
-                    "Driver 4-digit code",
+                    "Driver code",
                     type="password",
+                    max_chars=4,
                     key=f"van_driver_code_{van_nonce}",
                 )
                 purpose = st.selectbox("Purpose", VAN_PURPOSES, key=f"van_purpose_{van_nonce}")
@@ -986,20 +1013,21 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 submitted = st.form_submit_button("Sign Out Van", use_container_width=True)
 
             if submitted:
-                passengers_selected = st.session_state.get(f"van_passengers_{van_nonce}", passengers) or []
-                passengers_selected = [p for p in passengers_selected if p != driver]
-
-                if driver not in driver_names:
-                    st.error("This staff member is not cleared to drive a van.")
+                driver, err = resolve_code(driver_code, pin_lookup)
+                if err:
+                    st.error(err)
                     return
 
-                if normalize_pin(driver_code) != normalize_pin(staff_pins.get(driver, "")):
-                    st.error("Wrong driver code.")
+                if driver not in driver_names:
+                    st.error("This code is not cleared to drive a van.")
                     return
 
                 if purpose == "Other" and not other_purpose.strip():
                     st.error("Please enter the other purpose.")
                     return
+
+                passengers_selected = st.session_state.get(f"van_passengers_{van_nonce}", passengers) or []
+                passengers_selected = [p for p in passengers_selected if p != driver]
 
                 row = {
                     "id": str(uuid.uuid4())[:8],
@@ -1025,14 +1053,19 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
 
         van_to_in = out_vans[0] if len(out_vans) == 1 else st.selectbox("Which van is returning?", out_vans)
 
+        pin_lookup_in = build_pin_lookup(staff_pins)
         with st.form("van_signin_form", clear_on_submit=True):
-            return_driver = st.selectbox("Driver returning the van", options=driver_names)
-            return_driver_code = st.text_input("Driver 4-digit code", type="password")
+            st.caption("The driver returning the van types their code.")
+            return_driver_code = st.text_input("Driver code", type="password", max_chars=4)
             submitted_in = st.form_submit_button("Sign In Van", use_container_width=True)
 
         if submitted_in:
-            if normalize_pin(return_driver_code) != normalize_pin(staff_pins.get(return_driver, "")):
-                st.error("Wrong driver code.")
+            return_driver, err = resolve_code(return_driver_code, pin_lookup_in)
+            if err:
+                st.error(err)
+                return
+            if return_driver not in driver_names:
+                st.error("This code is not cleared to drive a van.")
                 return
 
             last_passengers = ""
