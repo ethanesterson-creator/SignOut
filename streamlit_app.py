@@ -31,7 +31,7 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 REASONS = ["Period Off", "Day Off", "Night Off", "Other (type reason)"]
 
-VANS = ["Van 1", "Van 2", "Van 3"]
+VANS = ["Van 1 (White)", "Van 2 (Black)", "Van 3 (Red)"]
 VAN_PURPOSES = ["Period Off", "Night Off", "Day Off", "Field Trip", "Tournament", "Other"]
 
 # Legacy tag from the old auto day-off feature. Kept only so old rows
