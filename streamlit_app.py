@@ -32,6 +32,13 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 REASONS = ["Period Off", "Day Off", "Night Off", "Other (type reason)"]
 
 VANS = ["Van 1", "Van 2", "Van 3"]
+VAN_LABELS = {"Van 1": "Van 1 (White)", "Van 2": "Van 2 (Black)", "Van 3": "Van 3 (Red)"}
+
+
+def van_label(v: str) -> str:
+    return VAN_LABELS.get(v, v)
+
+
 VAN_PURPOSES = ["Period Off", "Night Off", "Day Off", "Field Trip", "Tournament", "Other"]
 
 # Legacy tag from the old auto day-off feature. Kept only so old rows
@@ -848,7 +855,7 @@ def render_van_cards(status_map: dict):
             cards.append(
                 f"<div class='bc-van-card bc-van-out'>"
                 f"<div class='bc-van-status out'>OUT</div>"
-                f"<div class='bc-van-title'>{esc(v)}</div>"
+                f"<div class='bc-van-title'>{esc(van_label(v))}</div>"
                 f"<div class='bc-meta'>Driver: <strong>{esc(info.get('driver', ''))}</strong></div>"
                 f"<div class='bc-meta'>Purpose: {esc(purpose)}</div>"
                 f"{passengers_html}"
@@ -858,7 +865,7 @@ def render_van_cards(status_map: dict):
             cards.append(
                 f"<div class='bc-van-card'>"
                 f"<div class='bc-van-status in'>IN</div>"
-                f"<div class='bc-van-title'>{esc(v)}</div>"
+                f"<div class='bc-van-title'>{esc(van_label(v))}</div>"
                 f"<div class='bc-meta'>Parked at camp</div>"
                 f"</div>"
             )
@@ -886,19 +893,19 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     df_out = get_currently_out(df_logs)
 
     section_title("Sign Out")
-    st.caption("Type your code. The app knows who you are.")
+    st.caption("Type your code and press Enter. The app knows who you are.")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        code = st.text_input("Your code", type="password", max_chars=4, key=f"signout_code_{n}")
-    with col2:
-        reason = st.selectbox("Reason for going out", REASONS, key="signout_reason")
+    reason = st.selectbox("Reason for going out", REASONS, key="signout_reason")
 
     other_reason = ""
     if reason == "Other (type reason)":
         other_reason = st.text_input("Type your reason", key="signout_other_reason")
 
-    if st.button("Sign Out", key="signout_button"):
+    with st.form("signout_form", clear_on_submit=False):
+        code = st.text_input("Your code", type="password", max_chars=4, key=f"signout_code_{n}")
+        submitted = st.form_submit_button("Sign Out", use_container_width=True)
+
+    if submitted:
         name, err = resolve_code(code, pin_lookup)
         if err:
             st.error(err)
@@ -915,7 +922,7 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     st.markdown("---")
 
     section_title("Sign In")
-    st.caption("Type your code to sign back in.")
+    st.caption("Type your code and press Enter to sign back in.")
 
     df_logs = load_logs_df_cached()
     df_out = get_currently_out(df_logs)
@@ -925,9 +932,11 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
         crest_footer()
         return
 
-    code_in = st.text_input("Your code", type="password", max_chars=4, key=f"signin_code_{n}")
+    with st.form("signin_form", clear_on_submit=False):
+        code_in = st.text_input("Your code", type="password", max_chars=4, key=f"signin_code_{n}")
+        submitted_in = st.form_submit_button("Sign In", use_container_width=True)
 
-    if st.button("Sign In", key="signin_button"):
+    if submitted_in:
         name_in, err = resolve_code(code_in, pin_lookup)
         if err:
             st.error(err)
@@ -991,7 +1000,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
     if available is None:
         st.warning("No vans available. All vans are currently out.")
     else:
-        st.info(f"Next available: **{available}**")
+        st.info(f"Next available: **{van_label(available)}**")
 
         # IMPORTANT: check eligibility OUTSIDE the form to avoid "missing submit button" warning
         if not driver_names:
@@ -999,7 +1008,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
         else:
             pin_lookup = build_pin_lookup(staff_pins)
             with st.form("van_signout_form", clear_on_submit=False):
-                st.caption("The driver types their code. Only driving-tested staff are accepted.")
+                st.caption("The driver types their code, checks off every passenger, and submits once.")
                 driver_code = st.text_input(
                     "Driver code",
                     type="password",
@@ -1012,11 +1021,11 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 if purpose == "Other":
                     other_purpose = st.text_input("Other purpose (required)", key=f"van_other_purpose_{van_nonce}")
 
-                passengers = st.multiselect(
-                    "Passengers (select everyone riding with the driver)",
-                    options=staff_names,
-                    key=f"van_passengers_{van_nonce}",
-                )
+                st.markdown("**Passengers** (check everyone riding)")
+                pax_cols = st.columns(3)
+                for i, sname in enumerate(staff_names):
+                    with pax_cols[i % 3]:
+                        st.checkbox(sname, key=f"van_pax_{van_nonce}_{sname}")
 
                 submitted = st.form_submit_button("Sign Out Van", use_container_width=True)
 
@@ -1034,7 +1043,10 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                     st.error("Please enter the other purpose.")
                     return
 
-                passengers_selected = st.session_state.get(f"van_passengers_{van_nonce}", passengers) or []
+                passengers_selected = [
+                    sname for sname in staff_names
+                    if st.session_state.get(f"van_pax_{van_nonce}_{sname}", False)
+                ]
                 passengers_selected = [p for p in passengers_selected if p != driver]
 
                 row = {
@@ -1051,7 +1063,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 append_vans_row(row)
 
                 st.session_state["van_form_nonce"] += 1
-                st.session_state["van_flash"] = f"{available} signed out under {driver}."
+                st.session_state["van_flash"] = f"{van_label(available)} signed out under {driver}."
                 st.rerun()
 
     # Sign IN section
@@ -1059,7 +1071,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
         st.divider()
         section_title("Sign In a Van")
 
-        van_to_in = out_vans[0] if len(out_vans) == 1 else st.selectbox("Which van is returning?", out_vans)
+        van_to_in = out_vans[0] if len(out_vans) == 1 else st.selectbox("Which van is returning?", out_vans, format_func=van_label)
 
         pin_lookup_in = build_pin_lookup(staff_pins)
         with st.form("van_signin_form", clear_on_submit=True):
@@ -1105,7 +1117,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 "status": "IN",
             }
             append_vans_row(row)
-            st.session_state["van_flash"] = f"{van_to_in} signed back in under {return_driver}."
+            st.session_state["van_flash"] = f"{van_label(van_to_in)} signed back in under {return_driver}."
             st.rerun()
 
     crest_footer()
