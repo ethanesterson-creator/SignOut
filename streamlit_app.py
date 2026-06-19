@@ -31,7 +31,7 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 REASONS = ["Period Off", "Day Off", "Night Off", "Other (type reason)"]
 
-VANS = ["Van 1 (White)", "Van 2 (Black)", "Van 3 (Red)"]
+VANS = ["Van 1", "Van 2", "Van 3"]
 VAN_PURPOSES = ["Period Off", "Night Off", "Day Off", "Field Trip", "Tournament", "Other"]
 
 # Legacy tag from the old auto day-off feature. Kept only so old rows
@@ -872,6 +872,12 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
 
     pin_lookup = build_pin_lookup(staff_pins)
 
+    # Bumping this nonce changes the code field keys, so the boxes come back
+    # empty after a sign out or sign in. The next counselor starts fresh.
+    if "signio_nonce" not in st.session_state:
+        st.session_state["signio_nonce"] = 0
+    n = st.session_state["signio_nonce"]
+
     flash = st.session_state.pop("log_flash", "")
     if flash:
         st.success(flash)
@@ -884,7 +890,7 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
 
     col1, col2 = st.columns(2)
     with col1:
-        code = st.text_input("Your code", type="password", max_chars=4, key="signout_code")
+        code = st.text_input("Your code", type="password", max_chars=4, key=f"signout_code_{n}")
     with col2:
         reason = st.selectbox("Reason for going out", REASONS, key="signout_reason")
 
@@ -903,6 +909,7 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
         else:
             append_log_row(name, reason, other_reason, action="OUT", status="OUT")
             st.session_state["log_flash"] = f"{name} signed OUT successfully."
+            st.session_state["signio_nonce"] += 1
             st.rerun()
 
     st.markdown("---")
@@ -918,7 +925,7 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
         crest_footer()
         return
 
-    code_in = st.text_input("Your code", type="password", max_chars=4, key="signin_code")
+    code_in = st.text_input("Your code", type="password", max_chars=4, key=f"signin_code_{n}")
 
     if st.button("Sign In", key="signin_button"):
         name_in, err = resolve_code(code_in, pin_lookup)
@@ -930,6 +937,7 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
             row = df_out[df_out["name"] == name_in].iloc[0]
             append_log_row(name_in, row["reason"], row["other_reason"], action="IN", status="IN")
             st.session_state["log_flash"] = f"{name_in} signed IN successfully."
+            st.session_state["signio_nonce"] += 1
             st.rerun()
 
     crest_footer()
