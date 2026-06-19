@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+import requests
 import pandas as pd
 import pytz
 import streamlit as st
@@ -587,6 +588,28 @@ def clear_logs_cache():
     load_logs_df_cached.clear()
 
 
+def notify_phone(title: str, message: str):
+    """Push a notification to the phone through ntfy.
+
+    Reads the topic from secrets, so nothing leaks in the code. A push failure
+    never blocks a sign-out, because the whole call is wrapped and ignored on
+    error. Set ntfy_topic in Streamlit secrets to turn this on.
+    """
+    try:
+        topic = st.secrets.get("ntfy_topic", "")
+        if not topic:
+            return
+        server = str(st.secrets.get("ntfy_server", "https://ntfy.sh")).rstrip("/")
+        requests.post(
+            f"{server}/{topic}",
+            data=message.encode("utf-8"),
+            headers={"Title": title},
+            timeout=4,
+        )
+    except Exception:
+        pass
+
+
 def append_log_row(name: str, reason: str, other_reason: str, action: str, status: str):
     """Write a log row mapped to the sheet's actual header order.
 
@@ -610,6 +633,14 @@ def append_log_row(name: str, reason: str, other_reason: str, action: str, statu
         row = [row_dict.get(h, "") for h in headers]
         sheet.append_row(row)
         clear_logs_cache()
+
+        # Phone push after a clean write. Sign-out shows the reason; the typed
+        # detail wins when the reason is Other.
+        if action == "OUT":
+            detail = other_reason.strip() if (reason.startswith("Other") and other_reason.strip()) else reason
+            notify_phone("Bauercrest: Signed OUT", f"{name}: {detail}")
+        else:
+            notify_phone("Bauercrest: Signed IN", name)
     except (APIError, GSpreadException):
         st.error("Could not record this sign-in/sign-out due to a problem talking to Google Sheets.")
         st.stop()
