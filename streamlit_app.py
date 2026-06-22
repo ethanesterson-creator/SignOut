@@ -752,12 +752,16 @@ VAN_SIGNOUT_TAG = "VAN_TRIP"
 
 
 def get_latest_status_map(df: pd.DataFrame) -> dict:
-    """Map each name to their most recent log row: status, reason, other_reason."""
+    """Map each name to their most recent log row: status, reason, other_reason.
+
+    Stable sort keeps sheet order for same-second timestamps, so the last row
+    written for a person wins.
+    """
     if df is None or df.empty:
         return {}
     tmp = df.copy()
     tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
-    tmp = tmp.sort_values("timestamp", na_position="last")
+    tmp = tmp.sort_values("timestamp", na_position="last", kind="stable")
     last = tmp.groupby("name", dropna=False).tail(1)
     out = {}
     for _, r in last.iterrows():
@@ -769,15 +773,37 @@ def get_latest_status_map(df: pd.DataFrame) -> dict:
     return out
 
 
+def append_log_rows_batch(rows: list) -> bool:
+    """Write several log rows in ONE API call.
+
+    One call instead of one per person avoids tripping Google's per-minute
+    write limit on a full van. Never halts the app: returns True on success,
+    False on failure, so the caller stays in control.
+    """
+    if not rows:
+        return True
+    try:
+        sheet = get_worksheet(SHEET_LOGS)
+        ensure_logs_header(sheet)
+        headers = [h.strip() for h in sheet.row_values(1) if str(h).strip()]
+        matrix = [[rd.get(h, "") for h in headers] for rd in rows]
+        sheet.append_rows(matrix)
+        clear_logs_cache()
+        return True
+    except Exception:
+        return False
+
+
 def auto_signout_for_van(party: list, van_name: str):
     """Sign out everyone on a van who is currently IN. Reason: Van.
 
     Anyone already OUT (a Period Off, an earlier trip) is left untouched, so
     no doubles and no overwriting a real reason. Tagged so the van return can
-    find exactly these people. These rows do not buzz the staff phone.
-    Returns the list of names actually signed out.
+    find exactly these people. Written in one batched call and never halts the
+    van flow. Returns the list of names signed out.
     """
     status_map = get_latest_status_map(load_logs_df_cached())
+    rows = []
     signed = []
     for name in party:
         name = (name or "").strip()
@@ -786,19 +812,29 @@ def auto_signout_for_van(party: list, van_name: str):
         info = status_map.get(name)
         if info and info["status"] == "OUT":
             continue  # already out, leave their own sign-out alone
-        append_log_row(name, "Van", f"{VAN_SIGNOUT_TAG}|{van_name}", action="OUT", status="OUT", notify=False)
+        rows.append({
+            "id": str(uuid.uuid4())[:8],
+            "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
+            "name": name,
+            "reason": "Van",
+            "other_reason": f"{VAN_SIGNOUT_TAG}|{van_name}",
+            "action": "OUT",
+            "status": "OUT",
+        })
         signed.append(name)
-    return signed
+    ok = append_log_rows_batch(rows)
+    return signed if ok else []
 
 
 def auto_signin_for_van(party: list):
     """Sign back in only the people whose latest row is a van sign-out.
 
     Someone who signed themselves in already, or who was out for their own
-    reason, is skipped. No doubles, no overriding. These rows do not buzz the
-    staff phone. Returns the list of names actually signed in.
+    reason, is skipped. No doubles, no overriding. One batched call, never
+    halts the van flow. Returns the list of names signed in.
     """
     status_map = get_latest_status_map(load_logs_df_cached())
+    rows = []
     signed = []
     for name in party:
         name = (name or "").strip()
@@ -813,9 +849,18 @@ def auto_signin_for_van(party: list):
             and info["other_reason"].startswith(VAN_SIGNOUT_TAG)
         )
         if is_van_out:
-            append_log_row(name, "Van", info["other_reason"], action="IN", status="IN", notify=False)
+            rows.append({
+                "id": str(uuid.uuid4())[:8],
+                "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
+                "name": name,
+                "reason": "Van",
+                "other_reason": info["other_reason"],
+                "action": "IN",
+                "status": "IN",
+            })
             signed.append(name)
-    return signed
+    ok = append_log_rows_batch(rows)
+    return signed if ok else []
 
 # =================================================
 # DAYS OFF (DISPLAY ONLY)
@@ -1214,20 +1259,28 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                     "action": "CHECKOUT",
                     "status": "OUT",
                 }
-                append_vans_row(row)
+                try:
+                    append_vans_row(row)
+                except Exception:
+                    st.error("Could not save the van checkout. Please try again.")
+                    return
 
-                # Tie the trip to camp sign-out. Everyone on the van who is
-                # currently in gets signed out with reason Van. Anyone already
-                # out keeps their own sign-out.
-                party = [driver] + passengers_selected
-                auto_signout_for_van(party, chosen_van)
-
+                # Van is saved. Push to the vans phone right away, before the
+                # camp-board link, so nothing downstream can block the alert.
                 pax_count = len(passengers_selected)
                 purpose_text = other_purpose.strip() if (purpose == "Other" and other_purpose.strip()) else purpose
                 notify_vans(
                     "Bauercrest: Van OUT",
                     f"{van_label(chosen_van)} - {driver} ({purpose_text}), {pax_count} passenger(s)",
                 )
+
+                # Link the trip to the camp board. A hiccup here never undoes
+                # the van checkout or the alert above.
+                try:
+                    party = [driver] + passengers_selected
+                    auto_signout_for_van(party, chosen_van)
+                except Exception:
+                    st.warning("Van saved and alert sent, but linking riders to the Who's Out board hit a snag.")
 
                 st.session_state["van_form_nonce"] += 1
                 st.session_state["van_flash"] = f"{van_label(chosen_van)} signed out under {driver}. Riders signed out of camp."
@@ -1238,11 +1291,14 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
         st.divider()
         section_title("Sign In a Van")
 
-        van_to_in = out_vans[0] if len(out_vans) == 1 else st.selectbox("Which van is returning?", out_vans, format_func=van_label)
-
         pin_lookup_in = build_pin_lookup(staff_pins)
         with st.form("van_signin_form", clear_on_submit=True):
-            st.caption("Type your code, set how much gas is left, and submit.")
+            st.caption("Pick the van you are returning, type your code, set the gas left, and submit.")
+            van_to_in = st.selectbox(
+                "Which van are you signing back in?",
+                out_vans,
+                format_func=van_label,
+            )
             return_driver_code = st.text_input("Your code", type="password", max_chars=4)
             gas_left = st.selectbox("Gas left", ["Full", "3/4", "Half", "1/4", "Low / Empty"])
             submitted_in = st.form_submit_button("Sign In Van", use_container_width=True)
@@ -1287,18 +1343,27 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 "status": "IN",
                 "gas_left": gas_left,
             }
-            append_vans_row(row)
+            try:
+                append_vans_row(row)
+            except Exception:
+                st.error("Could not save the van sign-in. Please try again.")
+                return
 
-            # Tie the return to camp sign-in. Only the people the van signed
-            # out get signed back in. Anyone who already signed themselves in,
-            # or who was out for their own reason, is left alone.
-            party_in = [original_driver] + [p.strip() for p in last_passengers.split(",") if p.strip()]
-            auto_signin_for_van(party_in)
-
+            # Van is saved. Push to the vans phone right away, with the gas
+            # level, before the camp-board link.
             notify_vans(
                 "Bauercrest: Van IN",
                 f"{van_label(van_to_in)} returned by {return_driver}, gas: {gas_left}",
             )
+
+            # Sign the riders back into camp. Only the people the van signed
+            # out are touched. A hiccup here never undoes the sign-in or alert.
+            try:
+                party_in = [original_driver] + [p.strip() for p in last_passengers.split(",") if p.strip()]
+                auto_signin_for_van(party_in)
+            except Exception:
+                st.warning("Van signed in and alert sent, but linking riders back to the Who's Out board hit a snag.")
+
             st.session_state["van_flash"] = f"{van_label(van_to_in)} signed back in under {return_driver}. Gas: {gas_left}. Riders signed back in."
             st.rerun()
 
