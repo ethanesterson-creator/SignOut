@@ -328,6 +328,24 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     font-size: 0.97rem;
 }}
 
+@keyframes bcFlashFade {{
+    0%   {{ opacity: 0; transform: translateY(-4px); }}
+    10%  {{ opacity: 1; transform: translateY(0); }}
+    75%  {{ opacity: 1; }}
+    100% {{ opacity: 0; transform: translateY(-4px); }}
+}}
+.bc-flash {{
+    background: #E7F4EA;
+    border: 1px solid #2E7D32;
+    color: #1B5E20;
+    border-radius: 10px;
+    padding: 0.7rem 1rem;
+    font-family: 'Public Sans', sans-serif;
+    font-weight: 600;
+    margin-bottom: 0.6rem;
+    animation: bcFlashFade 2.4s ease forwards;
+}}
+
 .bc-footer {{
     margin-top: 2.5rem;
     padding-top: 0.8rem;
@@ -366,6 +384,11 @@ def section_title(title: str):
 
 def empty_note(text: str):
     st.markdown(f"<div class='bc-empty'>{esc(text)}</div>", unsafe_allow_html=True)
+
+
+def flash_banner(msg: str):
+    """Inline green confirmation that fades out on its own after ~2 seconds."""
+    st.markdown(f"<div class='bc-flash'>{esc(msg)}</div>", unsafe_allow_html=True)
 
 
 def crest_footer():
@@ -918,7 +941,7 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
 
     flash = st.session_state.pop("log_flash", "")
     if flash:
-        st.success(flash)
+        flash_banner(flash)
 
     df_logs = load_logs_df_cached()
     df_out = get_currently_out(df_logs)
@@ -1015,12 +1038,12 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
 
     flash = st.session_state.pop("van_flash", "")
     if flash:
-        st.success(flash)
+        flash_banner(flash)
 
     vans_df = load_vans_df_cached()
     status_map = compute_van_status(vans_df)
     out_vans = [v for v in VANS if status_map.get(v, {}).get("status") == "OUT"]
-    available = next_available_van(status_map)
+    free_vans = [v for v in VANS if status_map.get(v, {}).get("status") != "OUT"]
 
     section_title("Van Status")
     render_van_cards(status_map)
@@ -1028,18 +1051,22 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
     st.divider()
     section_title("Sign Out a Van")
 
-    if available is None:
+    if not free_vans:
         st.warning("No vans available. All vans are currently out.")
     else:
-        st.info(f"Next available: **{van_label(available)}**")
-
         # IMPORTANT: check eligibility OUTSIDE the form to avoid "missing submit button" warning
         if not driver_names:
             st.warning("No eligible drivers found. Set drivers.passed_test=TRUE for cleared drivers.")
         else:
             pin_lookup = build_pin_lookup(staff_pins)
             with st.form("van_signout_form", clear_on_submit=False):
-                st.caption("The driver types their code, checks off every passenger, and submits once.")
+                st.caption("Pick the van, type the driver code, check off every passenger, and submit once.")
+                chosen_van = st.selectbox(
+                    "Which van are you taking?",
+                    free_vans,
+                    format_func=van_label,
+                    key=f"van_choice_{van_nonce}",
+                )
                 driver_code = st.text_input(
                     "Driver code",
                     type="password",
@@ -1070,6 +1097,12 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                     st.error("This code is not cleared to drive a van.")
                     return
 
+                # Guard against two people grabbing the same van at once.
+                fresh_status = compute_van_status(load_vans_df_cached())
+                if fresh_status.get(chosen_van, {}).get("status") == "OUT":
+                    st.error(f"{van_label(chosen_van)} was taken a moment ago. Pick another van.")
+                    return
+
                 if purpose == "Other" and not other_purpose.strip():
                     st.error("Please enter the other purpose.")
                     return
@@ -1083,7 +1116,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 row = {
                     "id": str(uuid.uuid4())[:8],
                     "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
-                    "van": available,
+                    "van": chosen_van,
                     "driver": driver,
                     "purpose": purpose,
                     "passengers": ", ".join(passengers_selected),
@@ -1093,8 +1126,15 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 }
                 append_vans_row(row)
 
+                pax_count = len(passengers_selected)
+                purpose_text = other_purpose.strip() if (purpose == "Other" and other_purpose.strip()) else purpose
+                notify_phone(
+                    "Bauercrest: Van OUT",
+                    f"{van_label(chosen_van)} - {driver} ({purpose_text}), {pax_count} passenger(s)",
+                )
+
                 st.session_state["van_form_nonce"] += 1
-                st.session_state["van_flash"] = f"{van_label(available)} signed out under {driver}."
+                st.session_state["van_flash"] = f"{van_label(chosen_van)} signed out under {driver}."
                 st.rerun()
 
     # Sign IN section
@@ -1148,6 +1188,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 "status": "IN",
             }
             append_vans_row(row)
+            notify_phone("Bauercrest: Van IN", f"{van_label(van_to_in)} returned by {return_driver}")
             st.session_state["van_flash"] = f"{van_label(van_to_in)} signed back in under {return_driver}."
             st.rerun()
 
