@@ -612,14 +612,28 @@ def clear_logs_cache():
 
 
 def notify_phone(title: str, message: str):
-    """Push a notification to the phone through ntfy.
+    """Push a notification to the main phone through ntfy.
 
     Reads the topic from secrets, so nothing leaks in the code. A push failure
     never blocks a sign-out, because the whole call is wrapped and ignored on
     error. Set ntfy_topic in Streamlit secrets to turn this on.
     """
+    _ntfy_send(st.secrets.get("ntfy_topic", ""), title, message)
+
+
+def notify_vans(title: str, message: str):
+    """Push van events to the vans phone.
+
+    Posts to ntfy_topic_vans if set, so van pushes land on a different phone
+    than staff sign-outs. Falls back to the main topic if the vans topic is
+    not configured, so van alerts never silently vanish.
+    """
+    topic = st.secrets.get("ntfy_topic_vans", "") or st.secrets.get("ntfy_topic", "")
+    _ntfy_send(topic, title, message)
+
+
+def _ntfy_send(topic: str, title: str, message: str):
     try:
-        topic = st.secrets.get("ntfy_topic", "")
         if not topic:
             return
         server = str(st.secrets.get("ntfy_server", "https://ntfy.sh")).rstrip("/")
@@ -633,11 +647,13 @@ def notify_phone(title: str, message: str):
         pass
 
 
-def append_log_row(name: str, reason: str, other_reason: str, action: str, status: str):
+def append_log_row(name: str, reason: str, other_reason: str, action: str, status: str, notify: bool = True):
     """Write a log row mapped to the sheet's actual header order.
 
     Mapping by header (instead of fixed position) keeps rows aligned even if
-    someone reorders columns in Google Sheets.
+    someone reorders columns in Google Sheets. Set notify=False for van-driven
+    auto sign-outs, so they do not buzz the staff phone (the vans phone covers
+    those).
     """
     try:
         sheet = get_worksheet(SHEET_LOGS)
@@ -659,11 +675,12 @@ def append_log_row(name: str, reason: str, other_reason: str, action: str, statu
 
         # Phone push after a clean write. Sign-out shows the reason; the typed
         # detail wins when the reason is Other.
-        if action == "OUT":
-            detail = other_reason.strip() if (reason.startswith("Other") and other_reason.strip()) else reason
-            notify_phone("Bauercrest: Signed OUT", f"{name}: {detail}")
-        else:
-            notify_phone("Bauercrest: Signed IN", name)
+        if notify:
+            if action == "OUT":
+                detail = other_reason.strip() if (reason.startswith("Other") and other_reason.strip()) else reason
+                notify_phone("Bauercrest: Signed OUT", f"{name}: {detail}")
+            else:
+                notify_phone("Bauercrest: Signed IN", name)
     except (APIError, GSpreadException):
         st.error("Could not record this sign-in/sign-out due to a problem talking to Google Sheets.")
         st.stop()
@@ -726,6 +743,79 @@ def get_currently_out(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["name", "reason", "other_reason", "timestamp"])
 
     return out_rows[["name", "reason", "other_reason", "timestamp"]]
+
+
+# Marker stored in a van-driven sign-out's other_reason. Lets the van return
+# sign back in only the people the van itself signed out, and never touch
+# someone who was already out for their own reason.
+VAN_SIGNOUT_TAG = "VAN_TRIP"
+
+
+def get_latest_status_map(df: pd.DataFrame) -> dict:
+    """Map each name to their most recent log row: status, reason, other_reason."""
+    if df is None or df.empty:
+        return {}
+    tmp = df.copy()
+    tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
+    tmp = tmp.sort_values("timestamp", na_position="last")
+    last = tmp.groupby("name", dropna=False).tail(1)
+    out = {}
+    for _, r in last.iterrows():
+        out[str(r.get("name", "")).strip()] = {
+            "status": str(r.get("status", "")).strip().upper(),
+            "reason": str(r.get("reason", "")).strip(),
+            "other_reason": str(r.get("other_reason", "")).strip(),
+        }
+    return out
+
+
+def auto_signout_for_van(party: list, van_name: str):
+    """Sign out everyone on a van who is currently IN. Reason: Van.
+
+    Anyone already OUT (a Period Off, an earlier trip) is left untouched, so
+    no doubles and no overwriting a real reason. Tagged so the van return can
+    find exactly these people. These rows do not buzz the staff phone.
+    Returns the list of names actually signed out.
+    """
+    status_map = get_latest_status_map(load_logs_df_cached())
+    signed = []
+    for name in party:
+        name = (name or "").strip()
+        if not name:
+            continue
+        info = status_map.get(name)
+        if info and info["status"] == "OUT":
+            continue  # already out, leave their own sign-out alone
+        append_log_row(name, "Van", f"{VAN_SIGNOUT_TAG}|{van_name}", action="OUT", status="OUT", notify=False)
+        signed.append(name)
+    return signed
+
+
+def auto_signin_for_van(party: list):
+    """Sign back in only the people whose latest row is a van sign-out.
+
+    Someone who signed themselves in already, or who was out for their own
+    reason, is skipped. No doubles, no overriding. These rows do not buzz the
+    staff phone. Returns the list of names actually signed in.
+    """
+    status_map = get_latest_status_map(load_logs_df_cached())
+    signed = []
+    for name in party:
+        name = (name or "").strip()
+        if not name:
+            continue
+        info = status_map.get(name)
+        if not info:
+            continue
+        is_van_out = (
+            info["status"] == "OUT"
+            and info["reason"] == "Van"
+            and info["other_reason"].startswith(VAN_SIGNOUT_TAG)
+        )
+        if is_van_out:
+            append_log_row(name, "Van", info["other_reason"], action="IN", status="IN", notify=False)
+            signed.append(name)
+    return signed
 
 # =================================================
 # DAYS OFF (DISPLAY ONLY)
@@ -1126,15 +1216,21 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 }
                 append_vans_row(row)
 
+                # Tie the trip to camp sign-out. Everyone on the van who is
+                # currently in gets signed out with reason Van. Anyone already
+                # out keeps their own sign-out.
+                party = [driver] + passengers_selected
+                auto_signout_for_van(party, chosen_van)
+
                 pax_count = len(passengers_selected)
                 purpose_text = other_purpose.strip() if (purpose == "Other" and other_purpose.strip()) else purpose
-                notify_phone(
+                notify_vans(
                     "Bauercrest: Van OUT",
                     f"{van_label(chosen_van)} - {driver} ({purpose_text}), {pax_count} passenger(s)",
                 )
 
                 st.session_state["van_form_nonce"] += 1
-                st.session_state["van_flash"] = f"{van_label(chosen_van)} signed out under {driver}."
+                st.session_state["van_flash"] = f"{van_label(chosen_van)} signed out under {driver}. Riders signed out of camp."
                 st.rerun()
 
     # Sign IN section
@@ -1163,6 +1259,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
             last_passengers = ""
             last_purpose = ""
             last_other_purpose = ""
+            original_driver = ""
             try:
                 tmp = vans_df.copy()
                 tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
@@ -1174,6 +1271,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                     last_passengers = str(src.get("passengers", "")).strip()
                     last_purpose = str(src.get("purpose", "")).strip()
                     last_other_purpose = str(src.get("other_purpose", "")).strip()
+                    original_driver = str(src.get("driver", "")).strip()
             except Exception:
                 pass
 
@@ -1190,11 +1288,18 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 "gas_left": gas_left,
             }
             append_vans_row(row)
-            notify_phone(
+
+            # Tie the return to camp sign-in. Only the people the van signed
+            # out get signed back in. Anyone who already signed themselves in,
+            # or who was out for their own reason, is left alone.
+            party_in = [original_driver] + [p.strip() for p in last_passengers.split(",") if p.strip()]
+            auto_signin_for_van(party_in)
+
+            notify_vans(
                 "Bauercrest: Van IN",
                 f"{van_label(van_to_in)} returned by {return_driver}, gas: {gas_left}",
             )
-            st.session_state["van_flash"] = f"{van_label(van_to_in)} signed back in under {return_driver}. Gas: {gas_left}."
+            st.session_state["van_flash"] = f"{van_label(van_to_in)} signed back in under {return_driver}. Gas: {gas_left}. Riders signed back in."
             st.rerun()
 
     crest_footer()
