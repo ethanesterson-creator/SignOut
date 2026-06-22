@@ -49,7 +49,7 @@ LEGACY_AUTO_TAG_PREFIX = "AUTO_DAY_OFF"
 # Vans sheet required headers
 VANS_HEADERS_REQUIRED = [
     "id", "timestamp", "van", "driver", "purpose", "passengers",
-    "other_purpose", "action", "status"
+    "other_purpose", "action", "status", "gas_left"
 ]
 
 # Logs sheet required headers
@@ -1146,17 +1146,18 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
 
         pin_lookup_in = build_pin_lookup(staff_pins)
         with st.form("van_signin_form", clear_on_submit=True):
-            st.caption("The driver returning the van types their code.")
-            return_driver_code = st.text_input("Driver code", type="password", max_chars=4)
+            st.caption("Type your code, set how much gas is left, and submit.")
+            return_driver_code = st.text_input("Your code", type="password", max_chars=4)
+            gas_left = st.selectbox("Gas left", ["Full", "3/4", "Half", "1/4", "Low / Empty"])
             submitted_in = st.form_submit_button("Sign In Van", use_container_width=True)
 
         if submitted_in:
+            # Signing a van back in records its return. The driving is already
+            # done, so any recognized active staff code works here. Taking a
+            # van OUT still requires a driving-tested driver.
             return_driver, err = resolve_code(return_driver_code, pin_lookup_in)
             if err:
                 st.error(err)
-                return
-            if return_driver not in driver_names:
-                st.error("This code is not cleared to drive a van.")
                 return
 
             last_passengers = ""
@@ -1186,10 +1187,14 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 "other_purpose": last_other_purpose,
                 "action": "CHECKIN",
                 "status": "IN",
+                "gas_left": gas_left,
             }
             append_vans_row(row)
-            notify_phone("Bauercrest: Van IN", f"{van_label(van_to_in)} returned by {return_driver}")
-            st.session_state["van_flash"] = f"{van_label(van_to_in)} signed back in under {return_driver}."
+            notify_phone(
+                "Bauercrest: Van IN",
+                f"{van_label(van_to_in)} returned by {return_driver}, gas: {gas_left}",
+            )
+            st.session_state["van_flash"] = f"{van_label(van_to_in)} signed back in under {return_driver}. Gas: {gas_left}."
             st.rerun()
 
     crest_footer()
@@ -1273,8 +1278,9 @@ def page_admin_history():
             "other_purpose": "Other Purpose",
             "action": "Action",
             "status": "Status",
+            "gas_left": "Gas Left",
         })
-        cols = [c for c in ["ID", "Time", "Van", "Driver", "Purpose", "Passengers", "Other Purpose", "Action", "Status"] if c in dfv.columns]
+        cols = [c for c in ["ID", "Time", "Van", "Driver", "Purpose", "Passengers", "Other Purpose", "Action", "Status", "Gas Left"] if c in dfv.columns]
         st.dataframe(dfv[cols], use_container_width=True)
 
         st.download_button(
