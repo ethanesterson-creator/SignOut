@@ -486,13 +486,54 @@ def get_worksheet(name: str):
     ss = get_spreadsheet()
     return ss.worksheet(name)
 
+
+def read_sheet_df(sheet) -> pd.DataFrame:
+    """Read a worksheet into a DataFrame without crashing on bad headers.
+
+    gspread's get_all_records throws when row 1 has a blank or duplicate
+    header. That happens if a column gets added twice or a header cell is
+    cleared. This reader uses raw values, makes every header unique and
+    non-blank, and never throws, so the app stays up no matter the sheet's
+    state. Extra de-duplicated columns are harmless and ignored downstream.
+    """
+    values = sheet.get_all_values()
+    if not values:
+        return pd.DataFrame()
+
+    raw_headers = values[0]
+    headers = []
+    seen = {}
+    for i, h in enumerate(raw_headers):
+        name = str(h).strip()
+        if not name:
+            name = f"col_{i}"
+        if name in seen:
+            seen[name] += 1
+            name = f"{name}_{seen[name]}"
+        else:
+            seen[name] = 0
+        headers.append(name)
+
+    body = values[1:]
+    width = len(headers)
+    norm = []
+    for r in body:
+        r = list(r)
+        if len(r) < width:
+            r = r + [""] * (width - len(r))
+        elif len(r) > width:
+            r = r[:width]
+        norm.append(r)
+
+    return pd.DataFrame(norm, columns=headers)
+
 # =================================================
 # STAFF + DRIVERS (FROM SHEETS)
 # =================================================
 @st.cache_data(ttl=30)
 def load_staff_df_cached():
     sheet = get_worksheet(SHEET_STAFF)
-    df = pd.DataFrame(sheet.get_all_records())
+    df = read_sheet_df(sheet)
     for c in ["name", "pin", "active"]:
         if c not in df.columns:
             df[c] = ""
@@ -511,7 +552,7 @@ def load_staff_df_cached():
 @st.cache_data(ttl=30)
 def load_drivers_df_cached():
     sheet = get_worksheet(SHEET_DRIVERS)
-    df = pd.DataFrame(sheet.get_all_records())
+    df = read_sheet_df(sheet)
     for c in ["name", "passed_test"]:
         if c not in df.columns:
             df[c] = ""
@@ -589,7 +630,7 @@ def load_logs_df_cached():
     try:
         sheet = get_worksheet(SHEET_LOGS)
         ensure_logs_header(sheet)
-        df = pd.DataFrame(sheet.get_all_records())
+        df = read_sheet_df(sheet)
     except Exception:
         return pd.DataFrame(columns=LOGS_HEADERS_REQUIRED)
 
@@ -870,7 +911,7 @@ def load_days_off_df_cached():
     """Reads days_off sheet if present. If missing, returns empty DF (feature disabled)."""
     try:
         sheet = get_worksheet(SHEET_DAYS_OFF)
-        df = pd.DataFrame(sheet.get_all_records())
+        df = read_sheet_df(sheet)
     except Exception:
         return pd.DataFrame(columns=["name", "weekday", "active"])
 
@@ -916,15 +957,38 @@ def get_vans_sheet():
 
 
 def ensure_vans_header(sheet):
-    """Ensure the vans sheet has the expected header row (adds missing columns to the end)."""
+    """Keep the vans header row clean: every required column present exactly once.
+
+    Compares case-insensitively and trims spaces, so it never adds a second
+    gas_left because of casing or a stray space. If the header is blank or has
+    duplicates, it rewrites a clean header without touching the data rows.
+    """
     try:
         headers = sheet.row_values(1)
         if not headers:
             sheet.insert_row(VANS_HEADERS_REQUIRED, 1)
             return
-        missing = [h for h in VANS_HEADERS_REQUIRED if h not in headers]
-        if missing:
-            new_headers = headers + missing
+
+        norm = [str(h).strip().lower() for h in headers]
+        has_dupes = len(norm) != len(set(n for n in norm if n))
+        has_blanks = any(not n for n in norm)
+        missing = [h for h in VANS_HEADERS_REQUIRED if h.lower() not in norm]
+
+        if has_dupes or has_blanks:
+            # Rebuild a clean header: keep the required columns in order, then
+            # any extra real columns that already hold data, de-duplicated.
+            extras = []
+            seen = set(h.lower() for h in VANS_HEADERS_REQUIRED)
+            for h in headers:
+                hl = str(h).strip().lower()
+                if hl and hl not in seen:
+                    extras.append(str(h).strip())
+                    seen.add(hl)
+            clean = VANS_HEADERS_REQUIRED + extras
+            sheet.delete_rows(1)
+            sheet.insert_row(clean, 1)
+        elif missing:
+            new_headers = [str(h).strip() for h in headers] + missing
             sheet.delete_rows(1)
             sheet.insert_row(new_headers, 1)
     except Exception as e:
@@ -936,7 +1000,7 @@ def ensure_vans_header(sheet):
 def load_vans_df_cached():
     sheet = get_vans_sheet()
     ensure_vans_header(sheet)
-    return pd.DataFrame(sheet.get_all_records())
+    return read_sheet_df(sheet)
 
 
 def clear_vans_cache():
