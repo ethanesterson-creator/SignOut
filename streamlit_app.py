@@ -673,15 +673,25 @@ def notify_vans(title: str, message: str):
     _ntfy_send(topic, title, message)
 
 
-def _ntfy_send(topic: str, title: str, message: str):
+def notify_emergency(title: str, message: str):
+    """High-priority push to the main phone for the emergency code."""
+    _ntfy_send(st.secrets.get("ntfy_topic", ""), title, message, priority="urgent", tags="rotating_light")
+
+
+def _ntfy_send(topic: str, title: str, message: str, priority: str = "", tags: str = ""):
     try:
         if not topic:
             return
         server = str(st.secrets.get("ntfy_server", "https://ntfy.sh")).rstrip("/")
+        headers = {"Title": title}
+        if priority:
+            headers["Priority"] = priority
+        if tags:
+            headers["Tags"] = tags
         requests.post(
             f"{server}/{topic}",
             data=message.encode("utf-8"),
-            headers={"Title": title},
+            headers=headers,
             timeout=4,
         )
     except Exception:
@@ -902,6 +912,124 @@ def auto_signin_for_van(party: list):
             signed.append(name)
     ok = append_log_rows_batch(rows)
     return signed if ok else []
+
+
+# =================================================
+# SPECIAL OPERATOR CODES (only you know these)
+# =================================================
+# Stored in Streamlit secrets so they never sit in the repo. Set any subset:
+#   code_field_trip_out, code_field_trip_in, code_emergency,
+#   code_headcount, code_clear
+FIELD_TRIP_TAG = "FIELD_TRIP"
+
+
+def get_special_code(name: str) -> str:
+    """Read one special code from secrets. Blank if unset."""
+    return str(st.secrets.get(name, "")).strip()
+
+
+def match_special_code(code: str):
+    """Return which special action a typed code triggers, or None.
+
+    Only non-blank configured codes can match, so an empty box never fires
+    anything. Codes are compared as typed (not zero-padded like staff PINs),
+    so make them 5-6 digits to stay clear of 4-digit staff codes.
+    """
+    code = str(code or "").strip()
+    if not code:
+        return None
+    table = {
+        "field_trip_out": get_special_code("code_field_trip_out"),
+        "field_trip_in": get_special_code("code_field_trip_in"),
+        "emergency": get_special_code("code_emergency"),
+        "headcount": get_special_code("code_headcount"),
+        "clear": get_special_code("code_clear"),
+    }
+    for action, secret in table.items():
+        if secret and code == secret:
+            return action
+    return None
+
+
+def field_trip_signout_all(staff_names: list) -> int:
+    """Sign out every active staff member who is currently IN. Reason: Field Trip.
+
+    Anyone already out (a Period Off, a van) is skipped, so no doubles and no
+    overwriting a real reason. Tagged so the return code signs back in exactly
+    these people. One batched write. Returns how many were signed out.
+    """
+    status_map = get_latest_status_map(load_logs_df_cached())
+    rows = []
+    stamp = datetime.now(TZ).isoformat(timespec="seconds")
+    for name in staff_names:
+        name = (name or "").strip()
+        if not name:
+            continue
+        info = status_map.get(name)
+        if info and info["status"] == "OUT":
+            continue
+        rows.append({
+            "id": str(uuid.uuid4())[:8],
+            "timestamp": stamp,
+            "name": name,
+            "reason": "Field Trip",
+            "other_reason": FIELD_TRIP_TAG,
+            "action": "OUT",
+            "status": "OUT",
+        })
+    append_log_rows_batch(rows)
+    return len(rows)
+
+
+def field_trip_signin_all() -> int:
+    """Sign back in only the people the field trip signed out.
+
+    Anyone who signed themselves in already, or who is out for another reason,
+    is left alone. One batched write. Returns how many were signed in.
+    """
+    status_map = get_latest_status_map(load_logs_df_cached())
+    rows = []
+    stamp = datetime.now(TZ).isoformat(timespec="seconds")
+    for name, info in status_map.items():
+        name = (name or "").strip()
+        if not name:
+            continue
+        is_trip_out = (
+            info["status"] == "OUT"
+            and info["reason"] == "Field Trip"
+            and info["other_reason"].startswith(FIELD_TRIP_TAG)
+        )
+        if is_trip_out:
+            rows.append({
+                "id": str(uuid.uuid4())[:8],
+                "timestamp": stamp,
+                "name": name,
+                "reason": "Field Trip",
+                "other_reason": info["other_reason"],
+                "action": "IN",
+                "status": "IN",
+            })
+    append_log_rows_batch(rows)
+    return len(rows)
+
+
+def handle_special_code(action: str, staff_names: list) -> bool:
+    """Run a special action. Returns True if it set a flash and needs a rerun.
+
+    Screen actions (emergency, headcount, clear) are handled by the caller via
+    query params; this handles the data actions and alerts.
+    """
+    if action == "field_trip_out":
+        count = field_trip_signout_all(staff_names)
+        notify_phone("Bauercrest: FIELD TRIP", f"All staff signed out for a field trip ({count}).")
+        st.session_state["log_flash"] = f"Field trip: {count} staff signed out of camp."
+        return True
+    if action == "field_trip_in":
+        count = field_trip_signin_all()
+        notify_phone("Bauercrest: Field trip back", f"Field trip returned, {count} signed back in.")
+        st.session_state["log_flash"] = f"Field trip: {count} staff signed back in."
+        return True
+    return False
 
 # =================================================
 # DAYS OFF (DISPLAY ONLY)
@@ -1155,22 +1283,39 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
         other_reason = st.text_input("Type your reason", key="signout_other_reason")
 
     with st.form("signout_form", clear_on_submit=False):
-        code = st.text_input("Your code", type="password", max_chars=4, key=f"signout_code_{n}")
+        code = st.text_input("Your code", type="password", max_chars=6, key=f"signout_code_{n}")
         submitted = st.form_submit_button("Sign Out", use_container_width=True)
 
     if submitted:
-        name, err = resolve_code(code, pin_lookup)
-        if err:
-            st.error(err)
-        elif reason == "Other (type reason)" and not other_reason.strip():
-            st.error("Please type a reason for 'Other'.")
-        elif (not df_out.empty) and name in df_out["name"].values:
-            st.error(f"{name} is already signed out.")
-        else:
-            append_log_row(name, reason, other_reason, action="OUT", status="OUT")
-            st.session_state["log_flash"] = f"{name} signed OUT successfully."
+        special = match_special_code(code)
+        if special:
+            # Operator codes take over before any normal sign-out logic.
             st.session_state["signio_nonce"] += 1
-            st.rerun()
+            if special in ("emergency", "headcount"):
+                st.query_params["screen"] = special
+                if special == "emergency":
+                    notify_emergency("BAUERCREST EMERGENCY", "Emergency screen activated at the Big House.")
+                st.rerun()
+            elif special == "clear":
+                if "screen" in st.query_params:
+                    del st.query_params["screen"]
+                st.rerun()
+            else:
+                handle_special_code(special, staff_names)
+                st.rerun()
+        else:
+            name, err = resolve_code(code, pin_lookup)
+            if err:
+                st.error(err)
+            elif reason == "Other (type reason)" and not other_reason.strip():
+                st.error("Please type a reason for 'Other'.")
+            elif (not df_out.empty) and name in df_out["name"].values:
+                st.error(f"{name} is already signed out.")
+            else:
+                append_log_row(name, reason, other_reason, action="OUT", status="OUT")
+                st.session_state["log_flash"] = f"{name} signed OUT successfully."
+                st.session_state["signio_nonce"] += 1
+                st.rerun()
 
     st.markdown("---")
 
@@ -1566,6 +1711,100 @@ def page_admin_history():
 # =================================================
 # MAIN
 # =================================================
+def get_screen_mode() -> str:
+    """Read the special screen from the URL, set by an operator code."""
+    try:
+        v = st.query_params.get("screen", "")
+    except Exception:
+        v = ""
+    if isinstance(v, (list, tuple)):
+        v = v[0] if v else ""
+    return str(v).strip().lower()
+
+
+def render_special_screen(screen: str, staff_names: list):
+    """Full-screen head count. Red for emergency, calm navy for head count.
+
+    Stays up until the clear code is typed. Refreshes on its own so the count
+    stays live. Reads the same logs as the board, so it is always accurate.
+    """
+    df_logs = load_logs_df_cached()
+    df_out = get_currently_out(df_logs)
+    out_names = sorted(df_out["name"].tolist())
+    out_set = set(out_names)
+    in_names = sorted([s for s in staff_names if s not in out_set])
+
+    # Reason lookup for the OUT column.
+    reason_by_name = {}
+    for _, r in df_out.iterrows():
+        re = str(r.get("reason", "")).strip()
+        det = clean_other_reason(r.get("other_reason", ""))
+        reason_by_name[str(r.get("name", "")).strip()] = f"{re}{(' - ' + det) if det else ''}"
+
+    is_emerg = (screen == "emergency")
+    bg = "#7A1620" if is_emerg else "#13294B"
+    accent = "#FFFFFF"
+    eyebrow = "EMERGENCY HEAD COUNT" if is_emerg else "HEAD COUNT"
+    title = "ACCOUNT FOR EVERYONE" if is_emerg else "Who Is In and Out"
+
+    in_items = "".join(f"<li>{esc(s)}</li>" for s in in_names) or "<li class='none'>None</li>"
+    out_items = "".join(
+        f"<li>{esc(s)} <span class='hc-reason'>{esc(reason_by_name.get(s, ''))}</span></li>"
+        for s in out_names
+    ) or "<li class='none'>None</li>"
+
+    st.markdown(
+        f"""
+        <style>
+        .hc-wrap {{ background:{bg}; color:{accent}; border-radius:16px; padding:1.6rem 1.8rem; }}
+        .hc-eyebrow {{ font-family:'Archivo',sans-serif; font-weight:800; letter-spacing:0.16em;
+            text-transform:uppercase; font-size:0.8rem; opacity:0.85; }}
+        .hc-title {{ font-family:'Archivo',sans-serif; font-weight:800; font-size:2.2rem; margin:0.1rem 0 1rem 0; }}
+        .hc-counts {{ display:flex; gap:1rem; margin-bottom:1.2rem; }}
+        .hc-count {{ background:rgba(255,255,255,0.12); border-radius:12px; padding:0.8rem 1.4rem; flex:1; }}
+        .hc-count .num {{ font-family:'Archivo',sans-serif; font-weight:800; font-size:2.6rem; line-height:1; }}
+        .hc-count .lbl {{ font-weight:700; letter-spacing:0.08em; text-transform:uppercase; font-size:0.8rem; opacity:0.85; }}
+        .hc-cols {{ display:grid; grid-template-columns:1fr 1fr; gap:1.2rem; }}
+        .hc-col h3 {{ font-family:'Archivo',sans-serif; font-weight:800; font-size:1.1rem;
+            border-bottom:2px solid rgba(255,255,255,0.4); padding-bottom:0.3rem; color:{accent}; }}
+        .hc-col ul {{ list-style:none; padding:0; margin:0.4rem 0 0 0; columns:2; }}
+        .hc-col li {{ font-size:1.02rem; font-weight:600; padding:0.15rem 0; break-inside:avoid; }}
+        .hc-col li.none {{ opacity:0.6; font-weight:500; }}
+        .hc-reason {{ font-weight:500; opacity:0.8; font-size:0.85rem; }}
+        </style>
+        <div class="hc-wrap">
+            <div class="hc-eyebrow">{esc(eyebrow)}</div>
+            <div class="hc-title">{esc(title)}</div>
+            <div class="hc-counts">
+                <div class="hc-count"><div class="num">{len(in_names)}</div><div class="lbl">In Camp</div></div>
+                <div class="hc-count"><div class="num">{len(out_names)}</div><div class="lbl">Out of Camp</div></div>
+                <div class="hc-count"><div class="num">{len(in_names) + len(out_names)}</div><div class="lbl">Total Active</div></div>
+            </div>
+            <div class="hc-cols">
+                <div class="hc-col"><h3>In Camp ({len(in_names)})</h3><ul>{in_items}</ul></div>
+                <div class="hc-col"><h3>Out of Camp ({len(out_names)})</h3><ul>{out_items}</ul></div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("")
+    with st.form("screen_clear_form", clear_on_submit=True):
+        clear_code = st.text_input("Exit code", type="password", max_chars=6)
+        exit_clicked = st.form_submit_button("Exit Screen")
+    if exit_clicked:
+        if match_special_code(clear_code) == "clear":
+            if "screen" in st.query_params:
+                del st.query_params["screen"]
+            st.rerun()
+        else:
+            st.error("Wrong exit code.")
+
+    # Keep the count live.
+    kiosk_autorefresh(20)
+
+
 def main():
     st.set_page_config(
         page_title="Bauercrest Staff Sign-Out",
@@ -1573,6 +1812,14 @@ def main():
         layout="wide",
     )
     inject_css()
+
+    # Operator screen takeover (emergency / head count), driven by the URL so
+    # it survives auto-refresh and stays up until the clear code is typed.
+    screen = get_screen_mode()
+    if screen in ("emergency", "headcount"):
+        _, staff_names, _ = get_staff_pins_and_lists()
+        render_special_screen(screen, staff_names)
+        return
 
     logo_path = Path("logo-header-2.png")
     if logo_path.exists():
