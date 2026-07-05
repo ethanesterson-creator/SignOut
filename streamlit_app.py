@@ -9,7 +9,7 @@ import pytz
 import streamlit as st
 
 import gspread
-from gspread.exceptions import APIError, GSpreadException
+from gspread.exceptions import APIError, GSpreadException, WorksheetNotFound
 from google.oauth2.service_account import Credentials
 
 # =================================================
@@ -27,6 +27,7 @@ SHEET_VANS = "vans"
 SHEET_STAFF = "staff"
 SHEET_DRIVERS = "drivers"
 SHEET_DAYS_OFF = "days_off"  # optional tab; used for the Day Off board (display only)
+SHEET_SETTINGS = "settings"  # auto-created; holds the campwide emergency flag
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -57,6 +58,8 @@ LOGS_HEADERS_REQUIRED = ["id", "timestamp", "name", "reason", "other_reason", "a
 
 # Pages that auto-refresh for the Big House kiosk. The sign-out form is
 # excluded on purpose so a refresh never wipes a PIN mid-entry.
+# Pages that show the live self-refreshing boards. The Sign In / Out and Admin
+# pages never auto-refresh, so typing is never interrupted.
 KIOSK_PAGES = {"Who's Out", "Vans"}
 
 # =================================================
@@ -430,26 +433,26 @@ def format_board_time(dt):
         return str(dt)
 
 
-def kiosk_autorefresh(seconds: int):
-    """Reload the whole page on a timer.
+BOARD_REFRESH_SECONDS = 60
+SCREEN_REFRESH_SECONDS = 20
 
-    The old version used a meta-refresh tag inside a Streamlit component.
-    Components render in a sandboxed iframe, so a meta refresh there reloaded
-    only the hidden iframe, not the app. Calling parent.location.reload()
-    from the component reloads the real page, so the board actually updates.
+
+def escalate_if_emergency_changed(current_screen: str = "normal"):
+    """From inside a live fragment, jump to a full app rerun when the campwide
+    emergency flag no longer matches what this screen is showing.
+
+    Normal boards flip TO the red screen when an emergency is declared
+    elsewhere. The red screen flips back to normal when it is cleared
+    elsewhere. This is what makes the emergency truly campwide without a
+    jarring full-page reload on every tick.
     """
-    if seconds and seconds > 0:
-        st.components.v1.html(
-            f"""
-            <script>
-            setTimeout(function() {{
-                if (window.parent) {{ window.parent.location.reload(); }}
-                else {{ window.location.reload(); }}
-            }}, {int(seconds) * 1000});
-            </script>
-            """,
-            height=0,
-        )
+    flag = get_emergency_flag()
+    if current_screen == "emergency":
+        if not flag:
+            st.rerun(scope="app")
+    else:
+        if flag:
+            st.rerun(scope="app")
 
 
 def normalize_weekday(s: str) -> str:
@@ -485,6 +488,54 @@ def get_spreadsheet():
 def get_worksheet(name: str):
     ss = get_spreadsheet()
     return ss.worksheet(name)
+
+
+def get_settings_sheet():
+    """Get the settings tab, creating it if missing. Holds key/value rows."""
+    ss = get_spreadsheet()
+    try:
+        return ss.worksheet(SHEET_SETTINGS)
+    except WorksheetNotFound:
+        sheet = ss.add_worksheet(title=SHEET_SETTINGS, rows=20, cols=2)
+        sheet.update("A1:B2", [["key", "value"], ["emergency", "FALSE"]])
+        return sheet
+
+
+def set_emergency_flag(on: bool):
+    """Write the campwide emergency flag. Every kiosk reads this on refresh."""
+    try:
+        sheet = get_settings_sheet()
+        cell = sheet.find("emergency")
+        value = "TRUE" if on else "FALSE"
+        if cell:
+            sheet.update_cell(cell.row, 2, value)
+        else:
+            sheet.append_row(["emergency", value])
+        get_emergency_flag.clear()
+    except Exception:
+        # Never let a flag write crash the app. The triggering screen still
+        # shows locally; other screens pick it up once the write lands.
+        pass
+
+
+@st.cache_data(ttl=8)
+def get_emergency_flag() -> bool:
+    """Read the campwide emergency flag. Short cache so it spreads fast.
+
+    Fails safe to False if the settings tab cannot be read, so a Sheets hiccup
+    never traps every kiosk on the red screen.
+    """
+    try:
+        sheet = get_settings_sheet()
+        df = read_sheet_df(sheet)
+        if df.empty or "key" not in df.columns or "value" not in df.columns:
+            return False
+        row = df[df["key"].astype(str).str.strip().str.lower() == "emergency"]
+        if row.empty:
+            return False
+        return str(row.iloc[0]["value"]).strip().upper() in ("TRUE", "1", "YES", "ON")
+    except Exception:
+        return False
 
 
 def read_sheet_df(sheet) -> pd.DataFrame:
@@ -1256,12 +1307,12 @@ def render_van_cards(status_map: dict):
 # PAGES
 # =================================================
 def page_sign_in_out(staff_pins: dict, staff_names: list):
-    page_title("Camp Bauercrest Staff", "Sign Out / Sign In")
+    page_title("Camp Bauercrest Staff", "Sign In / Out")
 
     pin_lookup = build_pin_lookup(staff_pins)
 
-    # Bumping this nonce changes the code field keys, so the boxes come back
-    # empty after a sign out or sign in. The next counselor starts fresh.
+    # Bumping this nonce changes the code field key, so the box comes back
+    # empty after each use. The next counselor starts fresh.
     if "signio_nonce" not in st.session_state:
         st.session_state["signio_nonce"] = 0
     n = st.session_state["signio_nonce"]
@@ -1273,30 +1324,33 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     df_logs = load_logs_df_cached()
     df_out = get_currently_out(df_logs)
 
-    section_title("Sign Out")
-    st.caption("Type your code and press Enter. The app knows who you are.")
+    st.caption("Type your code and press Enter. If you are in, you go out. If you are out, you come back in.")
 
-    reason = st.selectbox("Reason for going out", REASONS, key="signout_reason")
-
+    # Reason only matters when the code turns out to be a sign-out. It sits
+    # above the box and is read only if the person is currently in.
+    reason = st.selectbox("Reason (only used if you are signing out)", REASONS, key="signout_reason")
     other_reason = ""
     if reason == "Other (type reason)":
         other_reason = st.text_input("Type your reason", key="signout_other_reason")
 
-    with st.form("signout_form", clear_on_submit=False):
-        code = st.text_input("Your code", type="password", max_chars=6, key=f"signout_code_{n}")
-        submitted = st.form_submit_button("Sign Out", use_container_width=True)
+    with st.form("signio_form", clear_on_submit=False):
+        code = st.text_input("Your code", type="password", max_chars=6, key=f"signio_code_{n}")
+        submitted = st.form_submit_button("Enter", use_container_width=True)
 
     if submitted:
         special = match_special_code(code)
         if special:
-            # Operator codes take over before any normal sign-out logic.
+            # Operator codes take over before any normal sign logic.
             st.session_state["signio_nonce"] += 1
-            if special in ("emergency", "headcount"):
-                st.query_params["screen"] = special
-                if special == "emergency":
-                    notify_emergency("BAUERCREST EMERGENCY", "Emergency screen activated at the Big House.")
+            if special == "emergency":
+                set_emergency_flag(True)
+                notify_emergency("BAUERCREST EMERGENCY", "Emergency declared. All screens showing head count.")
+                st.rerun()
+            elif special == "headcount":
+                st.query_params["screen"] = "headcount"
                 st.rerun()
             elif special == "clear":
+                set_emergency_flag(False)
                 if "screen" in st.query_params:
                     del st.query_params["screen"]
                 st.rerun()
@@ -1307,45 +1361,22 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
             name, err = resolve_code(code, pin_lookup)
             if err:
                 st.error(err)
-            elif reason == "Other (type reason)" and not other_reason.strip():
-                st.error("Please type a reason for 'Other'.")
-            elif (not df_out.empty) and name in df_out["name"].values:
-                st.error(f"{name} is already signed out.")
             else:
-                append_log_row(name, reason, other_reason, action="OUT", status="OUT")
-                st.session_state["log_flash"] = f"{name} signed OUT successfully."
-                st.session_state["signio_nonce"] += 1
-                st.rerun()
-
-    st.markdown("---")
-
-    section_title("Sign In")
-    st.caption("Type your code and press Enter to sign back in.")
-
-    df_logs = load_logs_df_cached()
-    df_out = get_currently_out(df_logs)
-
-    if df_out.empty:
-        empty_note("No one is currently signed out.")
-        crest_footer()
-        return
-
-    with st.form("signin_form", clear_on_submit=False):
-        code_in = st.text_input("Your code", type="password", max_chars=4, key=f"signin_code_{n}")
-        submitted_in = st.form_submit_button("Sign In", use_container_width=True)
-
-    if submitted_in:
-        name_in, err = resolve_code(code_in, pin_lookup)
-        if err:
-            st.error(err)
-        elif name_in not in df_out["name"].values:
-            st.error(f"{name_in} is not currently signed out.")
-        else:
-            row = df_out[df_out["name"] == name_in].iloc[0]
-            append_log_row(name_in, row["reason"], row["other_reason"], action="IN", status="IN")
-            st.session_state["log_flash"] = f"{name_in} signed IN successfully."
-            st.session_state["signio_nonce"] += 1
-            st.rerun()
+                is_out = (not df_out.empty) and name in df_out["name"].values
+                if is_out:
+                    # Currently out -> sign them back in, carrying their reason.
+                    row = df_out[df_out["name"] == name].iloc[0]
+                    append_log_row(name, row["reason"], row["other_reason"], action="IN", status="IN")
+                    st.session_state["log_flash"] = f"{name} signed IN. Welcome back."
+                    st.session_state["signio_nonce"] += 1
+                    st.rerun()
+                elif reason == "Other (type reason)" and not other_reason.strip():
+                    st.error("Please type a reason for 'Other'.")
+                else:
+                    append_log_row(name, reason, other_reason, action="OUT", status="OUT")
+                    st.session_state["log_flash"] = f"{name} signed OUT. Reason: {reason if reason != 'Other (type reason)' else other_reason}."
+                    st.session_state["signio_nonce"] += 1
+                    st.rerun()
 
     crest_footer()
 
@@ -1353,23 +1384,29 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
 def page_whos_out():
     page_title("The Big House Board", "Who's Out Right Now")
 
-    df_logs = load_logs_df_cached()
-    df_out = get_currently_out(df_logs)
+    @st.fragment(run_every=BOARD_REFRESH_SECONDS)
+    def live_board():
+        # Flip to the red screen if an emergency is declared on another machine.
+        escalate_if_emergency_changed("normal")
 
-    if df_out.empty:
-        empty_note("No staff are currently signed out.")
-    else:
-        render_out_cards(df_out)
+        df_logs = load_logs_df_cached()
+        df_out = get_currently_out(df_logs)
 
-    # Day Off board (display only). Reads the days_off sheet. The app never
-    # signs anyone out automatically; this is a reminder of who is scheduled.
-    day_off_names = get_day_off_names_today()
-    if day_off_names:
-        st.markdown("")
-        section_title(f"Day Off Today ({datetime.now(TZ).strftime('%A')})")
-        render_day_off_chips(day_off_names)
-        st.caption("Scheduled days off from the days_off sheet. Everyone still signs out and in at the Big House.")
+        if df_out.empty:
+            empty_note("No staff are currently signed out.")
+        else:
+            render_out_cards(df_out)
 
+        # Day Off board (display only). Reads the days_off sheet. The app never
+        # signs anyone out automatically; this is a reminder of who is scheduled.
+        day_off_names = get_day_off_names_today()
+        if day_off_names:
+            st.markdown("")
+            section_title(f"Day Off Today ({datetime.now(TZ).strftime('%A')})")
+            render_day_off_chips(day_off_names)
+            st.caption("Scheduled days off from the days_off sheet. Everyone still signs out and in at the Big House.")
+
+    live_board()
     crest_footer()
 
 
@@ -1389,8 +1426,15 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
     out_vans = [v for v in VANS if status_map.get(v, {}).get("status") == "OUT"]
     free_vans = [v for v in VANS if status_map.get(v, {}).get("status") != "OUT"]
 
-    section_title("Van Status")
-    render_van_cards(status_map)
+    @st.fragment(run_every=BOARD_REFRESH_SECONDS)
+    def live_van_status():
+        # Flip to the red screen if an emergency is declared elsewhere.
+        escalate_if_emergency_changed("normal")
+        fresh = compute_van_status(load_vans_df_cached())
+        section_title("Van Status")
+        render_van_cards(fresh)
+
+    live_van_status()
 
     st.divider()
     section_title("Sign Out a Van")
@@ -1404,7 +1448,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
         else:
             pin_lookup = build_pin_lookup(staff_pins)
             with st.form("van_signout_form", clear_on_submit=False):
-                st.caption("Pick the van, type the driver code, check off every passenger, and submit once.")
+                st.caption("Pick the van and type your driver code. Passengers sign themselves out on the main page.")
                 chosen_van = st.selectbox(
                     "Which van are you taking?",
                     free_vans,
@@ -1422,12 +1466,6 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 other_purpose = ""
                 if purpose == "Other":
                     other_purpose = st.text_input("Other purpose (required)", key=f"van_other_purpose_{van_nonce}")
-
-                st.markdown("**Passengers** (check everyone riding)")
-                pax_cols = st.columns(3)
-                for i, sname in enumerate(staff_names):
-                    with pax_cols[i % 3]:
-                        st.checkbox(sname, key=f"van_pax_{van_nonce}_{sname}")
 
                 submitted = st.form_submit_button("Sign Out Van", use_container_width=True)
 
@@ -1451,19 +1489,13 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                     st.error("Please enter the other purpose.")
                     return
 
-                passengers_selected = [
-                    sname for sname in staff_names
-                    if st.session_state.get(f"van_pax_{van_nonce}_{sname}", False)
-                ]
-                passengers_selected = [p for p in passengers_selected if p != driver]
-
                 row = {
                     "id": str(uuid.uuid4())[:8],
                     "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
                     "van": chosen_van,
                     "driver": driver,
                     "purpose": purpose,
-                    "passengers": ", ".join(passengers_selected),
+                    "passengers": "",
                     "other_purpose": other_purpose.strip(),
                     "action": "CHECKOUT",
                     "status": "OUT",
@@ -1476,23 +1508,21 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
 
                 # Van is saved. Push to the vans phone right away, before the
                 # camp-board link, so nothing downstream can block the alert.
-                pax_count = len(passengers_selected)
                 purpose_text = other_purpose.strip() if (purpose == "Other" and other_purpose.strip()) else purpose
                 notify_vans(
                     "Bauercrest: Van OUT",
-                    f"{van_label(chosen_van)} - {driver} ({purpose_text}), {pax_count} passenger(s)",
+                    f"{van_label(chosen_van)} - {driver} ({purpose_text})",
                 )
 
-                # Link the trip to the camp board. A hiccup here never undoes
-                # the van checkout or the alert above.
+                # Sign the driver out of camp. A hiccup here never undoes the
+                # van checkout or the alert above.
                 try:
-                    party = [driver] + passengers_selected
-                    auto_signout_for_van(party, chosen_van)
+                    auto_signout_for_van([driver], chosen_van)
                 except Exception:
-                    st.warning("Van saved and alert sent, but linking riders to the Who's Out board hit a snag.")
+                    st.warning("Van saved and alert sent, but linking the driver to the Who's Out board hit a snag.")
 
                 st.session_state["van_form_nonce"] += 1
-                st.session_state["van_flash"] = f"{van_label(chosen_van)} signed out under {driver}. Riders signed out of camp."
+                st.session_state["van_flash"] = f"{van_label(chosen_van)} signed out under {driver}. Driver signed out of camp."
                 st.rerun()
 
     # Sign IN section
@@ -1521,7 +1551,6 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 st.error(err)
                 return
 
-            last_passengers = ""
             last_purpose = ""
             last_other_purpose = ""
             original_driver = ""
@@ -1533,7 +1562,6 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 if not van_rows.empty:
                     out_rows = van_rows[van_rows["status"].astype(str).str.upper() == "OUT"]
                     src = out_rows.iloc[-1] if not out_rows.empty else van_rows.iloc[-1]
-                    last_passengers = str(src.get("passengers", "")).strip()
                     last_purpose = str(src.get("purpose", "")).strip()
                     last_other_purpose = str(src.get("other_purpose", "")).strip()
                     original_driver = str(src.get("driver", "")).strip()
@@ -1546,7 +1574,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 "van": van_to_in,
                 "driver": return_driver,
                 "purpose": last_purpose,
-                "passengers": last_passengers,
+                "passengers": "",
                 "other_purpose": last_other_purpose,
                 "action": "CHECKIN",
                 "status": "IN",
@@ -1565,15 +1593,14 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 f"{van_label(van_to_in)} returned by {return_driver}, gas: {gas_left}",
             )
 
-            # Sign the riders back into camp. Only the people the van signed
-            # out are touched. A hiccup here never undoes the sign-in or alert.
+            # Sign the driver back into camp. Only the driver the van signed
+            # out is touched. A hiccup here never undoes the sign-in or alert.
             try:
-                party_in = [original_driver] + [p.strip() for p in last_passengers.split(",") if p.strip()]
-                auto_signin_for_van(party_in)
+                auto_signin_for_van([original_driver])
             except Exception:
-                st.warning("Van signed in and alert sent, but linking riders back to the Who's Out board hit a snag.")
+                st.warning("Van signed in and alert sent, but linking the driver back to the Who's Out board hit a snag.")
 
-            st.session_state["van_flash"] = f"{van_label(van_to_in)} signed back in under {return_driver}. Gas: {gas_left}. Riders signed back in."
+            st.session_state["van_flash"] = f"{van_label(van_to_in)} signed back in under {return_driver}. Gas: {gas_left}. Driver signed back in."
             st.rerun()
 
     crest_footer()
@@ -1725,69 +1752,77 @@ def get_screen_mode() -> str:
 def render_special_screen(screen: str, staff_names: list):
     """Full-screen head count. Red for emergency, calm navy for head count.
 
-    Stays up until the clear code is typed. Refreshes on its own so the count
-    stays live. Reads the same logs as the board, so it is always accurate.
+    The count refreshes quietly in a fragment, no full-page reload. Stays up
+    until the clear code is typed. An emergency cleared on another machine
+    drops this screen back to normal within a tick.
     """
-    df_logs = load_logs_df_cached()
-    df_out = get_currently_out(df_logs)
-    out_names = sorted(df_out["name"].tolist())
-    out_set = set(out_names)
-    in_names = sorted([s for s in staff_names if s not in out_set])
-
-    # Reason lookup for the OUT column.
-    reason_by_name = {}
-    for _, r in df_out.iterrows():
-        re = str(r.get("reason", "")).strip()
-        det = clean_other_reason(r.get("other_reason", ""))
-        reason_by_name[str(r.get("name", "")).strip()] = f"{re}{(' - ' + det) if det else ''}"
-
     is_emerg = (screen == "emergency")
-    bg = "#7A1620" if is_emerg else "#13294B"
-    accent = "#FFFFFF"
-    eyebrow = "EMERGENCY HEAD COUNT" if is_emerg else "HEAD COUNT"
-    title = "ACCOUNT FOR EVERYONE" if is_emerg else "Who Is In and Out"
 
-    in_items = "".join(f"<li>{esc(s)}</li>" for s in in_names) or "<li class='none'>None</li>"
-    out_items = "".join(
-        f"<li>{esc(s)} <span class='hc-reason'>{esc(reason_by_name.get(s, ''))}</span></li>"
-        for s in out_names
-    ) or "<li class='none'>None</li>"
+    @st.fragment(run_every=SCREEN_REFRESH_SECONDS)
+    def live_count():
+        # If the campwide state changed elsewhere, re-evaluate the whole app.
+        escalate_if_emergency_changed("emergency" if is_emerg else "normal")
 
-    st.markdown(
-        f"""
-        <style>
-        .hc-wrap {{ background:{bg}; color:{accent}; border-radius:16px; padding:1.6rem 1.8rem; }}
-        .hc-eyebrow {{ font-family:'Archivo',sans-serif; font-weight:800; letter-spacing:0.16em;
-            text-transform:uppercase; font-size:0.8rem; opacity:0.85; }}
-        .hc-title {{ font-family:'Archivo',sans-serif; font-weight:800; font-size:2.2rem; margin:0.1rem 0 1rem 0; }}
-        .hc-counts {{ display:flex; gap:1rem; margin-bottom:1.2rem; }}
-        .hc-count {{ background:rgba(255,255,255,0.12); border-radius:12px; padding:0.8rem 1.4rem; flex:1; }}
-        .hc-count .num {{ font-family:'Archivo',sans-serif; font-weight:800; font-size:2.6rem; line-height:1; }}
-        .hc-count .lbl {{ font-weight:700; letter-spacing:0.08em; text-transform:uppercase; font-size:0.8rem; opacity:0.85; }}
-        .hc-cols {{ display:grid; grid-template-columns:1fr 1fr; gap:1.2rem; }}
-        .hc-col h3 {{ font-family:'Archivo',sans-serif; font-weight:800; font-size:1.1rem;
-            border-bottom:2px solid rgba(255,255,255,0.4); padding-bottom:0.3rem; color:{accent}; }}
-        .hc-col ul {{ list-style:none; padding:0; margin:0.4rem 0 0 0; columns:2; }}
-        .hc-col li {{ font-size:1.02rem; font-weight:600; padding:0.15rem 0; break-inside:avoid; }}
-        .hc-col li.none {{ opacity:0.6; font-weight:500; }}
-        .hc-reason {{ font-weight:500; opacity:0.8; font-size:0.85rem; }}
-        </style>
-        <div class="hc-wrap">
-            <div class="hc-eyebrow">{esc(eyebrow)}</div>
-            <div class="hc-title">{esc(title)}</div>
-            <div class="hc-counts">
-                <div class="hc-count"><div class="num">{len(in_names)}</div><div class="lbl">In Camp</div></div>
-                <div class="hc-count"><div class="num">{len(out_names)}</div><div class="lbl">Out of Camp</div></div>
-                <div class="hc-count"><div class="num">{len(in_names) + len(out_names)}</div><div class="lbl">Total Active</div></div>
+        df_logs = load_logs_df_cached()
+        df_out = get_currently_out(df_logs)
+        out_names = sorted(df_out["name"].tolist())
+        out_set = set(out_names)
+        in_names = sorted([s for s in staff_names if s not in out_set])
+
+        reason_by_name = {}
+        for _, r in df_out.iterrows():
+            re = str(r.get("reason", "")).strip()
+            det = clean_other_reason(r.get("other_reason", ""))
+            reason_by_name[str(r.get("name", "")).strip()] = f"{re}{(' - ' + det) if det else ''}"
+
+        bg = "#7A1620" if is_emerg else "#13294B"
+        accent = "#FFFFFF"
+        eyebrow = "EMERGENCY HEAD COUNT" if is_emerg else "HEAD COUNT"
+        title = "ACCOUNT FOR EVERYONE" if is_emerg else "Who Is In and Out"
+
+        in_items = "".join(f"<li>{esc(s)}</li>" for s in in_names) or "<li class='none'>None</li>"
+        out_items = "".join(
+            f"<li>{esc(s)} <span class='hc-reason'>{esc(reason_by_name.get(s, ''))}</span></li>"
+            for s in out_names
+        ) or "<li class='none'>None</li>"
+
+        st.markdown(
+            f"""
+            <style>
+            .hc-wrap {{ background:{bg}; color:{accent}; border-radius:16px; padding:1.6rem 1.8rem; }}
+            .hc-eyebrow {{ font-family:'Archivo',sans-serif; font-weight:800; letter-spacing:0.16em;
+                text-transform:uppercase; font-size:0.8rem; opacity:0.85; }}
+            .hc-title {{ font-family:'Archivo',sans-serif; font-weight:800; font-size:2.2rem; margin:0.1rem 0 1rem 0; }}
+            .hc-counts {{ display:flex; gap:1rem; margin-bottom:1.2rem; }}
+            .hc-count {{ background:rgba(255,255,255,0.12); border-radius:12px; padding:0.8rem 1.4rem; flex:1; }}
+            .hc-count .num {{ font-family:'Archivo',sans-serif; font-weight:800; font-size:2.6rem; line-height:1; }}
+            .hc-count .lbl {{ font-weight:700; letter-spacing:0.08em; text-transform:uppercase; font-size:0.8rem; opacity:0.85; }}
+            .hc-cols {{ display:grid; grid-template-columns:1fr 1fr; gap:1.2rem; }}
+            .hc-col h3 {{ font-family:'Archivo',sans-serif; font-weight:800; font-size:1.1rem;
+                border-bottom:2px solid rgba(255,255,255,0.4); padding-bottom:0.3rem; color:{accent}; }}
+            .hc-col ul {{ list-style:none; padding:0; margin:0.4rem 0 0 0; columns:2; }}
+            .hc-col li {{ font-size:1.02rem; font-weight:600; padding:0.15rem 0; break-inside:avoid; }}
+            .hc-col li.none {{ opacity:0.6; font-weight:500; }}
+            .hc-reason {{ font-weight:500; opacity:0.8; font-size:0.85rem; }}
+            </style>
+            <div class="hc-wrap">
+                <div class="hc-eyebrow">{esc(eyebrow)}</div>
+                <div class="hc-title">{esc(title)}</div>
+                <div class="hc-counts">
+                    <div class="hc-count"><div class="num">{len(in_names)}</div><div class="lbl">In Camp</div></div>
+                    <div class="hc-count"><div class="num">{len(out_names)}</div><div class="lbl">Out of Camp</div></div>
+                    <div class="hc-count"><div class="num">{len(in_names) + len(out_names)}</div><div class="lbl">Total Active</div></div>
+                </div>
+                <div class="hc-cols">
+                    <div class="hc-col"><h3>In Camp ({len(in_names)})</h3><ul>{in_items}</ul></div>
+                    <div class="hc-col"><h3>Out of Camp ({len(out_names)})</h3><ul>{out_items}</ul></div>
+                </div>
             </div>
-            <div class="hc-cols">
-                <div class="hc-col"><h3>In Camp ({len(in_names)})</h3><ul>{in_items}</ul></div>
-                <div class="hc-col"><h3>Out of Camp ({len(out_names)})</h3><ul>{out_items}</ul></div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+            """,
+            unsafe_allow_html=True,
+        )
+
+    live_count()
 
     st.markdown("")
     with st.form("screen_clear_form", clear_on_submit=True):
@@ -1795,14 +1830,13 @@ def render_special_screen(screen: str, staff_names: list):
         exit_clicked = st.form_submit_button("Exit Screen")
     if exit_clicked:
         if match_special_code(clear_code) == "clear":
+            # Lift the campwide emergency and any local head-count screen.
+            set_emergency_flag(False)
             if "screen" in st.query_params:
                 del st.query_params["screen"]
             st.rerun()
         else:
             st.error("Wrong exit code.")
-
-    # Keep the count live.
-    kiosk_autorefresh(20)
 
 
 def main():
@@ -1813,12 +1847,17 @@ def main():
     )
     inject_css()
 
-    # Operator screen takeover (emergency / head count), driven by the URL so
-    # it survives auto-refresh and stays up until the clear code is typed.
-    screen = get_screen_mode()
-    if screen in ("emergency", "headcount"):
+    # Emergency is campwide: read the shared flag so every screen flips. Head
+    # count stays local to the machine that opened it, via the URL.
+    if get_emergency_flag():
         _, staff_names, _ = get_staff_pins_and_lists()
-        render_special_screen(screen, staff_names)
+        render_special_screen("emergency", staff_names)
+        return
+
+    screen = get_screen_mode()
+    if screen == "headcount":
+        _, staff_names, _ = get_staff_pins_and_lists()
+        render_special_screen("headcount", staff_names)
         return
 
     logo_path = Path("logo-header-2.png")
@@ -1835,14 +1874,7 @@ def main():
     )
 
     st.sidebar.markdown("---")
-    with st.sidebar.expander("Kiosk Settings", expanded=False):
-        auto_refresh_on = st.checkbox("Auto-refresh kiosk", value=True)
-        refresh_seconds = st.slider("Refresh every (seconds)", 10, 120, 30, step=5)
-
-    # Refresh only the display pages. The Sign In / Out and Admin pages
-    # never auto-refresh, so typing is never interrupted.
-    if auto_refresh_on and page in KIOSK_PAGES:
-        kiosk_autorefresh(refresh_seconds)
+    st.sidebar.caption("The Who's Out and Vans boards refresh on their own every minute.")
 
     staff_pins, staff_names, driver_names = get_staff_pins_and_lists()
 
