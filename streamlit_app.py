@@ -585,7 +585,7 @@ def read_sheet_df(sheet) -> pd.DataFrame:
 def load_staff_df_cached():
     sheet = get_worksheet(SHEET_STAFF)
     df = read_sheet_df(sheet)
-    for c in ["name", "pin", "active"]:
+    for c in ["name", "pin", "active", "admin"]:
         if c not in df.columns:
             df[c] = ""
 
@@ -595,6 +595,10 @@ def load_staff_df_cached():
     # active: treat blank as TRUE
     a = df["active"].astype(str).str.upper().str.strip()
     df["active"] = a.isin(["TRUE", "1", "YES", "Y", ""])
+
+    # admin: only explicit TRUE counts. Blank means not an admin.
+    adm = df["admin"].astype(str).str.upper().str.strip()
+    df["admin"] = adm.isin(["TRUE", "1", "YES", "Y"])
 
     df = df[df["name"] != ""].copy()
     return df
@@ -655,6 +659,29 @@ def resolve_code(code: str, pin_lookup: dict):
     if len(names) == 0:
         return None, "Code not recognized."
     return None, "This code is shared by more than one person. Ask the office for a unique code."
+
+
+def get_admin_names() -> set:
+    """Names of active staff flagged admin=TRUE in the staff sheet."""
+    staff_df = load_staff_df_cached()
+    active_admins = staff_df[(staff_df["active"]) & (staff_df["admin"])]
+    return set(active_admins["name"].tolist())
+
+
+def resolve_admin_code(code: str, staff_pins: dict):
+    """Turn a typed code into an admin name, or an error.
+
+    The code must belong to exactly one active staff member AND that person
+    must be flagged admin=TRUE. Anyone else, even with a valid code, is
+    rejected. Returns (admin_name, error).
+    """
+    lookup = build_pin_lookup(staff_pins)
+    name, err = resolve_code(code, lookup)
+    if err:
+        return None, err
+    if name not in get_admin_names():
+        return None, "This code is not an admin code."
+    return name, None
 
 # =================================================
 # LOGS SHEET HELPERS
@@ -972,6 +999,10 @@ def auto_signin_for_van(party: list):
 #   code_field_trip_out, code_field_trip_in, code_emergency,
 #   code_headcount, code_clear
 FIELD_TRIP_TAG = "FIELD_TRIP"
+
+# Marker written into a log row when an admin signs someone in from the Admin
+# page. Lets the history show a human corrected the board.
+ADMIN_SIGNIN_TAG = "ADMIN_SIGNIN"
 
 
 def get_special_code(name: str) -> str:
@@ -1606,7 +1637,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
     crest_footer()
 
 
-def page_admin_history():
+def page_admin_history(staff_pins: dict):
     page_title("Office Use Only", "Admin / History")
     ADMIN_PASSWORD = st.secrets.get("admin_password", "")
 
@@ -1633,6 +1664,118 @@ def page_admin_history():
             st.session_state.admin_authenticated = False
             st.success("Admin area locked again.")
             st.rerun()
+
+    # -------------------------------------------------
+    # ADMIN SIGN-IN: fix the board when someone forgot
+    # -------------------------------------------------
+    admin_flash = st.session_state.pop("admin_flash", "")
+    if admin_flash:
+        st.success(admin_flash)
+
+    section_title("Sign Someone Back In")
+    st.caption("For when a staff member forgot to sign in. Pick the person, type your admin code, and sign them in.")
+
+    df_out_now = get_currently_out(load_logs_df_cached())
+    out_names_now = sorted(df_out_now["name"].tolist())
+
+    if not out_names_now:
+        empty_note("No staff are currently signed out.")
+    else:
+        with st.form("admin_signin_form", clear_on_submit=True):
+            who = st.selectbox("Who is signed out?", out_names_now)
+            admin_code = st.text_input("Your admin code", type="password", max_chars=6)
+            do_signin = st.form_submit_button("Sign This Person In")
+
+        if do_signin:
+            admin_name, err = resolve_admin_code(admin_code, staff_pins)
+            if err:
+                st.error(err)
+            else:
+                row = df_out_now[df_out_now["name"] == who].iloc[0]
+                append_log_row(
+                    who,
+                    row["reason"],
+                    f"{ADMIN_SIGNIN_TAG}|{admin_name}",
+                    action="IN",
+                    status="IN",
+                )
+                st.session_state["admin_flash"] = f"{who} signed in by {admin_name}."
+                st.rerun()
+
+    st.markdown("---")
+
+    # -------------------------------------------------
+    # ADMIN VAN SIGN-IN: fix a van left showing OUT
+    # -------------------------------------------------
+    section_title("Sign a Van Back In")
+    st.caption("For when a van was left showing out. Pick the van, type your admin code, and sign it in.")
+
+    vans_now = load_vans_df_cached()
+    status_now = compute_van_status(vans_now)
+    out_vans_now = [v for v in VANS if status_now.get(v, {}).get("status") == "OUT"]
+
+    if not out_vans_now:
+        empty_note("No vans are currently signed out.")
+    else:
+        with st.form("admin_van_signin_form", clear_on_submit=True):
+            which_van = st.selectbox("Which van is out?", out_vans_now, format_func=van_label)
+            van_admin_code = st.text_input("Your admin code", type="password", max_chars=6, key="admin_van_code")
+            do_van_signin = st.form_submit_button("Sign This Van In")
+
+        if do_van_signin:
+            admin_name, err = resolve_admin_code(van_admin_code, staff_pins)
+            if err:
+                st.error(err)
+            else:
+                # Pull the van's original checkout so we can free its driver too.
+                orig_driver = ""
+                last_purpose = ""
+                last_other_purpose = ""
+                try:
+                    tmp = vans_now.copy()
+                    tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
+                    tmp = tmp.sort_values("timestamp", na_position="last")
+                    vr = tmp[tmp["van"] == which_van]
+                    if not vr.empty:
+                        outr = vr[vr["status"].astype(str).str.upper() == "OUT"]
+                        src = outr.iloc[-1] if not outr.empty else vr.iloc[-1]
+                        orig_driver = str(src.get("driver", "")).strip()
+                        last_purpose = str(src.get("purpose", "")).strip()
+                        last_other_purpose = str(src.get("other_purpose", "")).strip()
+                except Exception:
+                    pass
+
+                van_row = {
+                    "id": str(uuid.uuid4())[:8],
+                    "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
+                    "van": which_van,
+                    "driver": orig_driver or admin_name,
+                    "purpose": last_purpose,
+                    "passengers": "",
+                    "other_purpose": (last_other_purpose + f" [{ADMIN_SIGNIN_TAG}|{admin_name}]").strip(),
+                    "action": "CHECKIN",
+                    "status": "IN",
+                    "gas_left": "",
+                }
+                try:
+                    append_vans_row(van_row)
+                except Exception:
+                    st.error("Could not sign the van in. Please try again.")
+                    st.stop()
+
+                # Free the original driver on the camp board too, if the van
+                # had signed them out.
+                if orig_driver:
+                    try:
+                        auto_signin_for_van([orig_driver])
+                    except Exception:
+                        pass
+
+                notify_vans("Bauercrest: Van IN", f"{van_label(which_van)} signed in by admin {admin_name}")
+                st.session_state["admin_flash"] = f"{van_label(which_van)} signed in by {admin_name}."
+                st.rerun()
+
+    st.markdown("---")
 
     df_logs = load_logs_df_cached()
 
@@ -1885,7 +2028,7 @@ def main():
     elif page == "Vans":
         page_vans(staff_pins, staff_names, driver_names)
     elif page == "Admin / History":
-        page_admin_history()
+        page_admin_history(staff_pins)
 
 
 if __name__ == "__main__":
