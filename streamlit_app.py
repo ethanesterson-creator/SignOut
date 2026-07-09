@@ -1,4 +1,5 @@
 import html as html_lib
+import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -485,19 +486,32 @@ def get_spreadsheet():
     return client.open_by_key(SPREADSHEET_ID)
 
 
+@st.cache_resource
 def get_worksheet(name: str):
+    """Return a cached handle to a worksheet.
+
+    gspread's worksheet(name) hits the network to look up the tab every call.
+    Caching the handle removes that round-trip from every read and write. The
+    handle stays valid for the whole session; actual reads/writes still hit
+    the live sheet.
+    """
     ss = get_spreadsheet()
     return ss.worksheet(name)
 
 
 def get_settings_sheet():
     """Get the settings tab, creating it if missing. Holds key/value rows."""
-    ss = get_spreadsheet()
     try:
-        return ss.worksheet(SHEET_SETTINGS)
+        return get_worksheet(SHEET_SETTINGS)
     except WorksheetNotFound:
+        ss = get_spreadsheet()
         sheet = ss.add_worksheet(title=SHEET_SETTINGS, rows=20, cols=2)
         sheet.update("A1:B2", [["key", "value"], ["emergency", "FALSE"]])
+        # Drop the cached lookup so the next call finds the new tab.
+        try:
+            get_worksheet.clear()
+        except Exception:
+            pass
         return sheet
 
 
@@ -518,10 +532,13 @@ def set_emergency_flag(on: bool):
         pass
 
 
-@st.cache_data(ttl=8)
+@st.cache_data(ttl=12)
 def get_emergency_flag() -> bool:
-    """Read the campwide emergency flag. Short cache so it spreads fast.
+    """Read the campwide emergency flag. Cached briefly so it spreads fast
+    without hammering the sheet on every render.
 
+    The triggering machine clears this cache the moment it writes the flag, so
+    it flips instantly there; other screens pick it up on their next tick.
     Fails safe to False if the settings tab cannot be read, so a Sheets hiccup
     never traps every kiosk on the red screen.
     """
@@ -707,7 +724,6 @@ def ensure_logs_header(sheet):
 def load_logs_df_cached():
     try:
         sheet = get_worksheet(SHEET_LOGS)
-        ensure_logs_header(sheet)
         df = read_sheet_df(sheet)
     except Exception:
         return pd.DataFrame(columns=LOGS_HEADERS_REQUIRED)
@@ -728,6 +744,27 @@ def load_logs_df_cached():
 
 def clear_logs_cache():
     load_logs_df_cached.clear()
+
+
+@st.cache_data(ttl=600)
+def get_log_headers():
+    """Cached logs header order. Read once, reused for every write in the
+    session, so appends do not re-read the header each time."""
+    try:
+        hdr = [h.strip() for h in get_worksheet(SHEET_LOGS).row_values(1) if str(h).strip()]
+        return hdr or list(LOGS_HEADERS_REQUIRED)
+    except Exception:
+        return list(LOGS_HEADERS_REQUIRED)
+
+
+@st.cache_data(ttl=600)
+def get_van_headers():
+    """Cached vans header order, same idea as the logs headers."""
+    try:
+        hdr = [h.strip() for h in get_vans_sheet().row_values(1) if str(h).strip()]
+        return hdr or list(VANS_HEADERS_REQUIRED)
+    except Exception:
+        return list(VANS_HEADERS_REQUIRED)
 
 
 def notify_phone(title: str, message: str):
@@ -757,23 +794,38 @@ def notify_emergency(title: str, message: str):
 
 
 def _ntfy_send(topic: str, title: str, message: str, priority: str = "", tags: str = ""):
+    """Fire the push in the background so the sign-out never waits on it.
+
+    Secrets are read here on the main thread, then the actual HTTP call runs
+    on a daemon thread. If ntfy is slow or unreachable, the user still gets an
+    instant response; the push lands when it lands.
+    """
+    if not topic:
+        return
+    server = str(st.secrets.get("ntfy_server", "https://ntfy.sh")).rstrip("/")
+    headers = {"Title": title}
+    if priority:
+        headers["Priority"] = priority
+    if tags:
+        headers["Tags"] = tags
+    url = f"{server}/{topic}"
+    data = message.encode("utf-8")
+
+    def _post():
+        try:
+            requests.post(url, data=data, headers=headers, timeout=5)
+        except Exception:
+            pass
+
     try:
-        if not topic:
-            return
-        server = str(st.secrets.get("ntfy_server", "https://ntfy.sh")).rstrip("/")
-        headers = {"Title": title}
-        if priority:
-            headers["Priority"] = priority
-        if tags:
-            headers["Tags"] = tags
-        requests.post(
-            f"{server}/{topic}",
-            data=message.encode("utf-8"),
-            headers=headers,
-            timeout=4,
-        )
+        threading.Thread(target=_post, daemon=True).start()
     except Exception:
-        pass
+        # If a thread cannot start for any reason, fall back to a quick
+        # direct call so the push is not lost entirely.
+        try:
+            requests.post(url, data=data, headers=headers, timeout=2)
+        except Exception:
+            pass
 
 
 def append_log_row(name: str, reason: str, other_reason: str, action: str, status: str, notify: bool = True):
@@ -786,7 +838,6 @@ def append_log_row(name: str, reason: str, other_reason: str, action: str, statu
     """
     try:
         sheet = get_worksheet(SHEET_LOGS)
-        ensure_logs_header(sheet)
 
         row_dict = {
             "id": str(uuid.uuid4())[:8],
@@ -797,7 +848,7 @@ def append_log_row(name: str, reason: str, other_reason: str, action: str, statu
             "action": action,
             "status": status,
         }
-        headers = [h.strip() for h in sheet.row_values(1) if str(h).strip()]
+        headers = get_log_headers()
         row = [row_dict.get(h, "") for h in headers]
         sheet.append_row(row)
         clear_logs_cache()
@@ -913,8 +964,7 @@ def append_log_rows_batch(rows: list) -> bool:
         return True
     try:
         sheet = get_worksheet(SHEET_LOGS)
-        ensure_logs_header(sheet)
-        headers = [h.strip() for h in sheet.row_values(1) if str(h).strip()]
+        headers = get_log_headers()
         matrix = [[rd.get(h, "") for h in headers] for rd in rows]
         sheet.append_rows(matrix)
         clear_logs_cache()
@@ -1209,7 +1259,6 @@ def ensure_vans_header(sheet):
 @st.cache_data(ttl=10)
 def load_vans_df_cached():
     sheet = get_vans_sheet()
-    ensure_vans_header(sheet)
     return read_sheet_df(sheet)
 
 
@@ -1219,9 +1268,7 @@ def clear_vans_cache():
 
 def append_vans_row(row_dict: dict):
     sheet = get_vans_sheet()
-    ensure_vans_header(sheet)
-
-    headers = [h.strip() for h in sheet.row_values(1) if str(h).strip()]
+    headers = get_van_headers()
     row = [row_dict.get(h, "") for h in headers]
     sheet.append_row(row)
     clear_vans_cache()
@@ -1982,6 +2029,26 @@ def render_special_screen(screen: str, staff_names: list):
             st.error("Wrong exit code.")
 
 
+def ensure_headers_once():
+    """Fix the logs and vans header rows a single time per session.
+
+    Headers used to be re-checked on every read and write, a network call each
+    time. They only need checking once, so this runs at startup and then never
+    again for the session. If it repairs anything, the cached header lists are
+    cleared so the corrected order is picked up.
+    """
+    if st.session_state.get("_headers_ensured"):
+        return
+    try:
+        ensure_logs_header(get_worksheet(SHEET_LOGS))
+        ensure_vans_header(get_vans_sheet())
+        get_log_headers.clear()
+        get_van_headers.clear()
+    except Exception:
+        pass
+    st.session_state["_headers_ensured"] = True
+
+
 def main():
     st.set_page_config(
         page_title="Bauercrest Staff Sign-Out",
@@ -1989,6 +2056,7 @@ def main():
         layout="wide",
     )
     inject_css()
+    ensure_headers_once()
 
     # Emergency is campwide: read the shared flag so every screen flips. Head
     # count stays local to the machine that opened it, via the URL.
