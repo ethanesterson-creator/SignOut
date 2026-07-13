@@ -1,7 +1,7 @@
 import html as html_lib
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, time as dtime
 from pathlib import Path
 
 import requests
@@ -29,6 +29,7 @@ SHEET_STAFF = "staff"
 SHEET_DRIVERS = "drivers"
 SHEET_DAYS_OFF = "days_off"  # optional tab; used for the Day Off board (display only)
 SHEET_SETTINGS = "settings"  # auto-created; holds the campwide emergency flag
+SHEET_SCHEDULE = "schedule"  # auto-created; period start/end times for Period Off deadlines
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -55,7 +56,32 @@ VANS_HEADERS_REQUIRED = [
 ]
 
 # Logs sheet required headers
-LOGS_HEADERS_REQUIRED = ["id", "timestamp", "name", "reason", "other_reason", "action", "status"]
+LOGS_HEADERS_REQUIRED = ["id", "timestamp", "name", "reason", "other_reason", "action", "status", "due_back", "late"]
+
+# -------------------------------------------------
+# LATENESS RULES
+# -------------------------------------------------
+# Period Off: back 5 minutes before the period ends.
+PERIOD_OFF_GRACE_MIN = 5
+# Night Off: back by 12:15 AM the next morning.
+NIGHT_OFF_DUE = (0, 15)
+# Day Off: back by 7:45 AM the morning after.
+DAY_OFF_DUE = (7, 45)
+
+# Default camp schedule, used if the schedule tab is missing or empty. The tab
+# wins when present, so the office can change times without touching the code.
+DEFAULT_SCHEDULE = [
+    ("Period 1", "09:15", "10:05"),
+    ("Period 2", "10:15", "11:05"),
+    ("Period 3", "11:15", "12:05"),
+    ("Rest Period", "13:00", "14:00"),
+    ("Period 4", "14:15", "15:05"),
+    ("Snack", "15:15", "15:30"),
+    ("Period 5", "15:40", "16:30"),
+    ("G-Swim", "16:30", "17:30"),
+    ("Free Play", "18:35", "19:15"),
+]
+SCHEDULE_HEADERS = ["period", "start", "end"]
 
 # Pages that auto-refresh for the Big House kiosk. The sign-out form is
 # excluded on purpose so a refresh never wipes a PIN mid-entry.
@@ -255,6 +281,21 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     background: var(--cloud);
     color: var(--navy);
     border: 1px solid var(--line);
+}}
+
+/* Late: past due-back and still not signed in. */
+.bc-card.bc-card-late {{
+    background: #FDECEC;
+    border: 1px solid #B3261E;
+    border-top: 4px solid #B3261E;
+}}
+.bc-card.bc-card-late .bc-name {{ color: #7A1620; }}
+.bc-card.bc-card-late .bc-meta,
+.bc-card.bc-card-late .bc-time {{ color: #8C3A33; }}
+.bc-chip.bc-chip-late {{
+    background: #B3261E;
+    color: {WHITE};
+    margin-left: 0.3rem;
 }}
 
 .bc-dayoff-row {{
@@ -555,6 +596,195 @@ def get_emergency_flag() -> bool:
         return False
 
 
+def set_setting(key: str, value: str):
+    """Write any key/value into the settings tab."""
+    try:
+        sheet = get_settings_sheet()
+        cell = sheet.find(key)
+        if cell:
+            sheet.update_cell(cell.row, 2, value)
+        else:
+            sheet.append_row([key, value])
+        get_setting.clear()
+    except Exception:
+        pass
+
+
+@st.cache_data(ttl=20)
+def get_setting(key: str) -> str:
+    """Read any key from the settings tab. Blank if missing."""
+    try:
+        df = read_sheet_df(get_settings_sheet())
+        if df.empty or "key" not in df.columns or "value" not in df.columns:
+            return ""
+        row = df[df["key"].astype(str).str.strip().str.lower() == key.strip().lower()]
+        if row.empty:
+            return ""
+        return str(row.iloc[0]["value"]).strip()
+    except Exception:
+        return ""
+
+
+# =================================================
+# SCHEDULE + LATENESS
+# =================================================
+def get_schedule_sheet():
+    """Get the schedule tab, creating it with the camp default if missing."""
+    ss = get_spreadsheet()
+    try:
+        return get_worksheet(SHEET_SCHEDULE)
+    except WorksheetNotFound:
+        sheet = ss.add_worksheet(title=SHEET_SCHEDULE, rows=30, cols=3)
+        rows = [SCHEDULE_HEADERS] + [list(p) for p in DEFAULT_SCHEDULE]
+        sheet.update(f"A1:C{len(rows)}", rows)
+        try:
+            get_worksheet.clear()
+        except Exception:
+            pass
+        return sheet
+
+
+def _parse_hhmm(s: str):
+    """Parse '9:15', '09:15', or '14:15' into a time. None if unusable."""
+    s = str(s or "").strip()
+    if not s:
+        return None
+    for fmt in ("%H:%M", "%I:%M %p", "%I:%M%p", "%H:%M:%S"):
+        try:
+            return datetime.strptime(s, fmt).time()
+        except ValueError:
+            continue
+    return None
+
+
+@st.cache_data(ttl=120)
+def load_schedule():
+    """Return the day's periods as [(name, start_time, end_time)], sorted.
+
+    Read from the schedule tab so the office can edit times without a code
+    change. Falls back to the built-in camp default if the tab is missing,
+    empty, or unreadable, so lateness never silently stops working.
+    """
+    try:
+        df = read_sheet_df(get_schedule_sheet())
+        periods = []
+        if not df.empty and "start" in df.columns and "end" in df.columns:
+            for _, r in df.iterrows():
+                start = _parse_hhmm(r.get("start"))
+                end = _parse_hhmm(r.get("end"))
+                nm = str(r.get("period", "")).strip()
+                if start and end:
+                    periods.append((nm, start, end))
+        if periods:
+            return sorted(periods, key=lambda p: p[1])
+    except Exception:
+        pass
+    return sorted(
+        [(n, _parse_hhmm(s), _parse_hhmm(e)) for n, s, e in DEFAULT_SCHEDULE],
+        key=lambda p: p[1],
+    )
+
+
+def _next_clock_time(now: datetime, hh: int, mm: int) -> datetime:
+    """The next moment the clock reads hh:mm, strictly after now."""
+    candidate = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    if candidate <= now:
+        candidate = candidate + timedelta(days=1)
+    return candidate
+
+
+def compute_due_back(reason: str, now: datetime):
+    """When this person must be signed back in. None means no deadline.
+
+    Period Off  -> 5 minutes before the period they are in ends. If they sign
+                   out between periods, the next period's end is used.
+    Night Off   -> 12:15 AM the next morning.
+    Day Off     -> 7:45 AM the morning after.
+    Anything else (Other, Van) -> no deadline.
+    """
+    reason = str(reason or "").strip()
+
+    if reason == "Night Off":
+        return _next_clock_time(now, *NIGHT_OFF_DUE)
+
+    if reason == "Day Off":
+        return _next_clock_time(now, *DAY_OFF_DUE)
+
+    if reason == "Period Off":
+        today = now.date()
+        for _name, start, end in load_schedule():
+            if not start or not end:
+                continue
+            end_dt = TZ.localize(datetime.combine(today, end)) if now.tzinfo else datetime.combine(today, end)
+            due = end_dt - timedelta(minutes=PERIOD_OFF_GRACE_MIN)
+            # The first period whose deadline is still ahead of them is theirs.
+            # That covers being mid-period and being in a gap between periods.
+            if due > now:
+                return due
+        return None  # signed out after the last period; no deadline to enforce
+
+    return None
+
+
+def parse_due(s):
+    """Parse a stored due_back string back into an aware datetime, or None."""
+    s = str(s or "").strip()
+    if not s:
+        return None
+    try:
+        dt = pd.to_datetime(s, errors="coerce")
+        if pd.isna(dt):
+            return None
+        dt = dt.to_pydatetime()
+        if dt.tzinfo is None:
+            dt = TZ.localize(dt)
+        return dt
+    except Exception:
+        return None
+
+
+def minutes_late(due, when=None) -> int:
+    """How many whole minutes past the deadline. 0 if not late or no deadline."""
+    if not due:
+        return 0
+    when = when or datetime.now(TZ)
+    delta = (when - due).total_seconds()
+    return int(delta // 60) if delta > 0 else 0
+
+
+LATE_ALERT_KEY = "late_alerted"
+
+
+def check_late_and_alert(df_out: pd.DataFrame):
+    """Push once for each person who has just gone past their deadline.
+
+    Dedupe is stored in the settings tab, keyed on the sign-out row's id, so
+    two kiosks running the board never double-buzz you and nobody gets alerted
+    twice for the same sign-out. Wrapped so a failure never breaks the board.
+    """
+    try:
+        if df_out is None or df_out.empty:
+            return
+        already = set(x for x in get_setting(LATE_ALERT_KEY).split(",") if x)
+        new_alerts = []
+        for _, row in df_out.iterrows():
+            rid = str(row.get("id", "")).strip()
+            mins = minutes_late(parse_due(row.get("due_back", "")))
+            if mins > 0 and rid and rid not in already:
+                notify_phone(
+                    "Bauercrest: LATE",
+                    f"{row.get('name','')} is {mins} min late ({row.get('reason','')})",
+                )
+                new_alerts.append(rid)
+
+        if new_alerts:
+            merged = list(already | set(new_alerts))
+            # Keep the list from growing forever.
+            set_setting(LATE_ALERT_KEY, ",".join(merged[-300:]))
+    except Exception:
+        pass
+
+
 def read_sheet_df(sheet) -> pd.DataFrame:
     """Read a worksheet into a DataFrame without crashing on bad headers.
 
@@ -828,13 +1058,18 @@ def _ntfy_send(topic: str, title: str, message: str, priority: str = "", tags: s
             pass
 
 
-def append_log_row(name: str, reason: str, other_reason: str, action: str, status: str, notify: bool = True):
+def append_log_row(name: str, reason: str, other_reason: str, action: str, status: str,
+                   notify: bool = True, due_back=None, late: str = ""):
     """Write a log row mapped to the sheet's actual header order.
 
     Mapping by header (instead of fixed position) keeps rows aligned even if
     someone reorders columns in Google Sheets. Set notify=False for van-driven
     auto sign-outs, so they do not buzz the staff phone (the vans phone covers
     those).
+
+    due_back is stamped on the OUT row so the board and the alerts know when
+    this person is expected back. late is stamped on the IN row so the record
+    permanently shows they came back late.
     """
     try:
         sheet = get_worksheet(SHEET_LOGS)
@@ -847,6 +1082,8 @@ def append_log_row(name: str, reason: str, other_reason: str, action: str, statu
             "other_reason": other_reason or "",
             "action": action,
             "status": status,
+            "due_back": due_back.isoformat(timespec="seconds") if due_back else "",
+            "late": late or "",
         }
         headers = get_log_headers()
         row = [row_dict.get(h, "") for h in headers]
@@ -891,15 +1128,23 @@ def delete_logs_by_ids(ids_to_delete):
     df_keep = df[~df["id"].isin(ids_to_delete)].copy()
 
     try:
+        # Rewrite using the sheet's ACTUAL header order, not a hardcoded list.
+        # Forcing a fixed column list would drop any extra column and could
+        # shift data into the wrong columns.
+        headers = get_log_headers()
         sheet.clear()
-        sheet.insert_row(LOGS_HEADERS_REQUIRED, 1)
+        sheet.insert_row(headers, 1)
         if not df_keep.empty:
             df_out = df_keep.copy()
             df_out["timestamp"] = df_out["timestamp"].astype(str)
-            rows = df_out[LOGS_HEADERS_REQUIRED].values.tolist()
+            for h in headers:
+                if h not in df_out.columns:
+                    df_out[h] = ""
+            rows = df_out[headers].astype(str).values.tolist()
             if rows:
                 sheet.append_rows(rows)
         clear_logs_cache()
+        get_log_headers.clear()
     except (APIError, GSpreadException):
         st.error("Could not finish deleting selected log entries. Please try again later.")
         st.stop()
@@ -907,22 +1152,52 @@ def delete_logs_by_ids(ids_to_delete):
 # =================================================
 # LOGIC HELPERS
 # =================================================
-def get_currently_out(df: pd.DataFrame) -> pd.DataFrame:
-    """Return a dataframe of people whose latest status is OUT."""
-    if df is None or df.empty:
-        return pd.DataFrame(columns=["name", "reason", "other_reason", "timestamp"])
+def _sorted_by_recency(df: pd.DataFrame) -> pd.DataFrame:
+    """Sort log rows oldest -> newest, reliably.
 
-    tmp = df.copy()
+    Three things this guards against:
+    1. Timestamps are written to the SECOND, and batch writes (field trip, van)
+       stamp many rows with the identical second. A plain sort can reorder
+       ties, so the wrong row looks like the latest. We tie-break on the sheet
+       row order, since rows are appended in order, so the later row wins.
+    2. An unparseable timestamp (someone hand-edits the sheet) becomes NaT.
+       With na_position="last" a NaT row would sort NEWEST and win, freezing a
+       person's status. We push bad rows to the FRONT so they can never win.
+    3. A stable sort keeps equal keys in their original order.
+    """
+    tmp = df.copy().reset_index(drop=True)
+    tmp["_row"] = range(len(tmp))
     tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
-    tmp = tmp.sort_values("timestamp", na_position="last")
+    tmp = tmp.sort_values(
+        ["timestamp", "_row"],
+        na_position="first",
+        kind="stable",
+    )
+    return tmp
 
+
+def get_currently_out(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a dataframe of people whose latest status is OUT.
+
+    Carries id and due_back so the board can flag late people and the alert
+    can dedupe on the specific sign-out row.
+    """
+    cols = ["name", "reason", "other_reason", "timestamp", "due_back", "id"]
+    empty = pd.DataFrame(columns=cols)
+    if df is None or df.empty:
+        return empty
+
+    tmp = _sorted_by_recency(df)
+    for c in ["due_back", "id"]:
+        if c not in tmp.columns:
+            tmp[c] = ""
     last_actions = tmp.groupby("name", dropna=False).tail(1)
     out_rows = last_actions[last_actions["status"] == "OUT"].copy()
 
     if out_rows.empty:
-        return pd.DataFrame(columns=["name", "reason", "other_reason", "timestamp"])
+        return empty
 
-    return out_rows[["name", "reason", "other_reason", "timestamp"]]
+    return out_rows[cols]
 
 
 # Marker stored in a van-driven sign-out's other_reason. Lets the van return
@@ -939,9 +1214,7 @@ def get_latest_status_map(df: pd.DataFrame) -> dict:
     """
     if df is None or df.empty:
         return {}
-    tmp = df.copy()
-    tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
-    tmp = tmp.sort_values("timestamp", na_position="last", kind="stable")
+    tmp = _sorted_by_recency(df)
     last = tmp.groupby("name", dropna=False).tail(1)
     out = {}
     for _, r in last.iterrows():
@@ -949,8 +1222,30 @@ def get_latest_status_map(df: pd.DataFrame) -> dict:
             "status": str(r.get("status", "")).strip().upper(),
             "reason": str(r.get("reason", "")).strip(),
             "other_reason": str(r.get("other_reason", "")).strip(),
+            "due_back": str(r.get("due_back", "")).strip(),
+            "id": str(r.get("id", "")).strip(),
         }
     return out
+
+
+def get_status_fresh(name: str):
+    """Read this person's TRUE current status straight from the sheet.
+
+    The cached logs can be up to 10 seconds old, and Google Sheets itself can
+    lag a moment behind a write. The sign in/out box is a TOGGLE, so a stale
+    read does not just show old data, it picks the WRONG DIRECTION: it can
+    sign someone OUT a second time when they meant to sign IN, leaving them
+    stuck on the Who's Out board.
+
+    So before deciding direction, we drop the cache and re-read. Returns a
+    dict with status/reason/other_reason, or None if the person has no rows.
+    """
+    try:
+        clear_logs_cache()
+    except Exception:
+        pass
+    df = load_logs_df_cached()
+    return get_latest_status_map(df).get((name or "").strip())
 
 
 def append_log_rows_batch(rows: list) -> bool:
@@ -1331,10 +1626,19 @@ def render_out_cards(df_out: pd.DataFrame):
         details = esc(clean_other_reason(row.get("other_reason", "")))
         when = esc(format_board_time(row.get("timestamp")))
 
+        # Late = past their due-back time and still not signed in. The due time
+        # itself is never shown, only the fact that they are over.
+        mins = minutes_late(parse_due(row.get("due_back", "")))
+        is_late = mins > 0
+
         details_html = f"<div class='bc-meta'>{details}</div>" if details else ""
+        late_chip = f"<div class='bc-chip bc-chip-late'>LATE {mins} MIN</div>" if is_late else ""
+        card_cls = "bc-card bc-card-late" if is_late else "bc-card"
+
         cards.append(
-            f"<div class='bc-card'>"
+            f"<div class='{card_cls}'>"
             f"<div class='bc-chip'>{reason}</div>"
+            f"{late_chip}"
             f"<div class='bc-name'>{name}</div>"
             f"{details_html}"
             f"<div class='bc-meta'>Signed out at <span class='bc-time'>{when}</span></div>"
@@ -1399,9 +1703,6 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     if flash:
         flash_banner(flash)
 
-    df_logs = load_logs_df_cached()
-    df_out = get_currently_out(df_logs)
-
     st.caption("Type your code and press Enter. If you are in, you go out. If you are out, you come back in.")
 
     # Reason only matters when the code turns out to be a sign-out. It sits
@@ -1440,18 +1741,42 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
             if err:
                 st.error(err)
             else:
-                is_out = (not df_out.empty) and name in df_out["name"].values
+                # Decide direction from a FRESH read, never the cache. This is
+                # a toggle, so a stale read would not just show old data, it
+                # would flip the wrong way and sign someone OUT twice.
+                info = get_status_fresh(name)
+                is_out = bool(info and info["status"] == "OUT")
+
                 if is_out:
                     # Currently out -> sign them back in, carrying their reason.
-                    row = df_out[df_out["name"] == name].iloc[0]
-                    append_log_row(name, row["reason"], row["other_reason"], action="IN", status="IN")
-                    st.session_state["log_flash"] = f"{name} signed IN. Welcome back."
+                    # If they missed their deadline, stamp it on this row so the
+                    # record permanently shows they came back late.
+                    due = parse_due(info.get("due_back", ""))
+                    mins = minutes_late(due)
+                    late_note = f"LATE {mins} min" if mins > 0 else ""
+                    append_log_row(
+                        name,
+                        info.get("reason", ""),
+                        info.get("other_reason", ""),
+                        action="IN",
+                        status="IN",
+                        late=late_note,
+                    )
+                    if mins > 0:
+                        notify_phone(
+                            "Bauercrest: Signed IN (LATE)",
+                            f"{name} signed in {mins} min late ({info.get('reason','')})",
+                        )
+                        st.session_state["log_flash"] = f"{name} signed IN. LATE by {mins} min."
+                    else:
+                        st.session_state["log_flash"] = f"{name} signed IN. Welcome back."
                     st.session_state["signio_nonce"] += 1
                     st.rerun()
                 elif reason == "Other (type reason)" and not other_reason.strip():
                     st.error("Please type a reason for 'Other'.")
                 else:
-                    append_log_row(name, reason, other_reason, action="OUT", status="OUT")
+                    due = compute_due_back(reason, datetime.now(TZ))
+                    append_log_row(name, reason, other_reason, action="OUT", status="OUT", due_back=due)
                     st.session_state["log_flash"] = f"{name} signed OUT. Reason: {reason if reason != 'Other (type reason)' else other_reason}."
                     st.session_state["signio_nonce"] += 1
                     st.rerun()
@@ -1469,6 +1794,10 @@ def page_whos_out():
 
         df_logs = load_logs_df_cached()
         df_out = get_currently_out(df_logs)
+
+        # Alert on anyone who just crossed their deadline. Runs on the board's
+        # one-minute tick, deduped in the sheet so it fires only once.
+        check_late_and_alert(df_out)
 
         if df_out.empty:
             empty_note("No staff are currently signed out.")
@@ -1840,8 +2169,13 @@ def page_admin_history(staff_pins: dict):
             "other_reason": "Other Details",
             "action": "Action",
             "status": "Status",
+            "late": "Late",
         })
-        df_display = df_display[["ID", "Time", "Name", "Reason", "Other Details", "Action", "Status"]]
+        cols_show = ["ID", "Time", "Name", "Reason", "Other Details", "Action", "Status", "Late"]
+        for c in cols_show:
+            if c not in df_display.columns:
+                df_display[c] = ""
+        df_display = df_display[cols_show]
         st.dataframe(df_display, use_container_width=True)
 
         st.download_button(
@@ -2042,6 +2376,7 @@ def ensure_headers_once():
     try:
         ensure_logs_header(get_worksheet(SHEET_LOGS))
         ensure_vans_header(get_vans_sheet())
+        get_schedule_sheet()  # creates the schedule tab with camp defaults if missing
         get_log_headers.clear()
         get_van_headers.clear()
     except Exception:
