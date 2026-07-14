@@ -67,6 +67,11 @@ PERIOD_OFF_GRACE_MIN = 5
 NIGHT_OFF_DUE = (0, 15)
 # Day Off: back by 7:45 AM the morning after.
 DAY_OFF_DUE = (7, 45)
+# A Day Off deadline must be at least this far away. Without this, someone who
+# leaves at 6:00 AM on their day off would be "due back" at 7:45 THAT SAME
+# morning and get flagged late within the hour. If the next 7:45 is sooner
+# than this, the deadline rolls to the following morning.
+DAY_OFF_MIN_LEAD_HOURS = 6
 
 # Default camp schedule, used if the schedule tab is missing or empty. The tab
 # wins when present, so the office can change times without touching the code.
@@ -708,7 +713,12 @@ def compute_due_back(reason: str, now: datetime):
         return _next_clock_time(now, *NIGHT_OFF_DUE)
 
     if reason == "Day Off":
-        return _next_clock_time(now, *DAY_OFF_DUE)
+        due = _next_clock_time(now, *DAY_OFF_DUE)
+        # If they left early in the morning, the next 7:45 is only an hour or
+        # two away. A day off means back the FOLLOWING morning, so roll it.
+        if (due - now) < timedelta(hours=DAY_OFF_MIN_LEAD_HOURS):
+            due = due + timedelta(days=1)
+        return due
 
     if reason == "Period Off":
         today = now.date()
@@ -765,7 +775,18 @@ def check_late_and_alert(df_out: pd.DataFrame):
     try:
         if df_out is None or df_out.empty:
             return
-        already = set(x for x in get_setting(LATE_ALERT_KEY).split(",") if x)
+
+        # Read the dedupe list FRESH. A stale read here means two screens can
+        # both decide nobody has been alerted yet and both fire.
+        try:
+            get_setting.clear()
+        except Exception:
+            pass
+
+        raw = get_setting(LATE_ALERT_KEY)
+        already_list = [x for x in raw.split(",") if x]
+        already = set(already_list)
+
         new_alerts = []
         for _, row in df_out.iterrows():
             rid = str(row.get("id", "")).strip()
@@ -778,8 +799,10 @@ def check_late_and_alert(df_out: pd.DataFrame):
                 new_alerts.append(rid)
 
         if new_alerts:
-            merged = list(already | set(new_alerts))
-            # Keep the list from growing forever.
+            # Keep insertion order. Building this from a set would scramble the
+            # order, and trimming an unordered list can drop the NEWEST ids,
+            # which would make those people get alerted over and over.
+            merged = already_list + [r for r in new_alerts if r not in already]
             set_setting(LATE_ALERT_KEY, ",".join(merged[-300:]))
     except Exception:
         pass
@@ -1109,6 +1132,13 @@ def clear_all_logs():
         sheet.clear()
         sheet.insert_row(LOGS_HEADERS_REQUIRED, 1)
         clear_logs_cache()
+        # The header order just changed, and every old sign-out id is gone, so
+        # drop both caches or the next write could use the old column order.
+        try:
+            get_log_headers.clear()
+            set_setting(LATE_ALERT_KEY, "")
+        except Exception:
+            pass
     except (APIError, GSpreadException):
         st.error("Could not clear logs in Google Sheets. Please try again later.")
         st.stop()
@@ -1248,6 +1278,22 @@ def get_status_fresh(name: str):
     return get_latest_status_map(df).get((name or "").strip())
 
 
+def get_status_map_fresh() -> dict:
+    """Everyone's true current status, straight from the sheet.
+
+    The mass actions (van checkout, field trip) decide who to sign out based on
+    who is currently IN. Deciding that from a cache up to 10 seconds old can
+    sign out someone who ALREADY signed themselves out seconds earlier, giving
+    them two OUT rows and stranding them on the board. Same failure mode that
+    hit the toggle. So these reads are always fresh.
+    """
+    try:
+        clear_logs_cache()
+    except Exception:
+        pass
+    return get_latest_status_map(load_logs_df_cached())
+
+
 def append_log_rows_batch(rows: list) -> bool:
     """Write several log rows in ONE API call.
 
@@ -1276,7 +1322,7 @@ def auto_signout_for_van(party: list, van_name: str):
     find exactly these people. Written in one batched call and never halts the
     van flow. Returns the list of names signed out.
     """
-    status_map = get_latest_status_map(load_logs_df_cached())
+    status_map = get_status_map_fresh()
     rows = []
     signed = []
     for name in party:
@@ -1307,7 +1353,7 @@ def auto_signin_for_van(party: list):
     reason, is skipped. No doubles, no overriding. One batched call, never
     halts the van flow. Returns the list of names signed in.
     """
-    status_map = get_latest_status_map(load_logs_df_cached())
+    status_map = get_status_map_fresh()
     rows = []
     signed = []
     for name in party:
@@ -1385,7 +1431,7 @@ def field_trip_signout_all(staff_names: list) -> int:
     overwriting a real reason. Tagged so the return code signs back in exactly
     these people. One batched write. Returns how many were signed out.
     """
-    status_map = get_latest_status_map(load_logs_df_cached())
+    status_map = get_status_map_fresh()
     rows = []
     stamp = datetime.now(TZ).isoformat(timespec="seconds")
     for name in staff_names:
@@ -1414,7 +1460,7 @@ def field_trip_signin_all() -> int:
     Anyone who signed themselves in already, or who is out for another reason,
     is left alone. One batched write. Returns how many were signed in.
     """
-    status_map = get_latest_status_map(load_logs_df_cached())
+    status_map = get_status_map_fresh()
     rows = []
     stamp = datetime.now(TZ).isoformat(timespec="seconds")
     for name, info in status_map.items():
@@ -2068,14 +2114,20 @@ def page_admin_history(staff_pins: dict):
                 st.error(err)
             else:
                 row = df_out_now[df_out_now["name"] == who].iloc[0]
+                # An admin fixing the board must still record that they were
+                # late, otherwise the correction erases the lateness.
+                mins = minutes_late(parse_due(row.get("due_back", "")))
+                late_note = f"LATE {mins} min" if mins > 0 else ""
                 append_log_row(
                     who,
                     row["reason"],
                     f"{ADMIN_SIGNIN_TAG}|{admin_name}",
                     action="IN",
                     status="IN",
+                    late=late_note,
                 )
-                st.session_state["admin_flash"] = f"{who} signed in by {admin_name}."
+                extra = f" LATE by {mins} min." if mins > 0 else ""
+                st.session_state["admin_flash"] = f"{who} signed in by {admin_name}.{extra}"
                 st.rerun()
 
     st.markdown("---")
@@ -2432,6 +2484,27 @@ def main():
         page_vans(staff_pins, staff_names, driver_names)
     elif page == "Admin / History":
         page_admin_history(staff_pins)
+
+    # Background heartbeat. Runs on EVERY page, including the sign-out kiosk.
+    #
+    # Two jobs, both of which used to only happen if someone had the Who's Out
+    # board open:
+    #   1. Late alerts. The Big House kiosk sits on Sign In / Out all day, so
+    #      without this a Night Off deadline at 12:15 AM would pass unnoticed.
+    #   2. Emergency. A campwide emergency declared elsewhere now flips the
+    #      sign-out kiosk to the red screen too, not just the display boards.
+    #
+    # It draws nothing and holds no widgets, so it can never disturb someone
+    # typing their code.
+    @st.fragment(run_every=BOARD_REFRESH_SECONDS)
+    def heartbeat():
+        try:
+            escalate_if_emergency_changed("normal")
+            check_late_and_alert(get_currently_out(load_logs_df_cached()))
+        except Exception:
+            pass
+
+    heartbeat()
 
 
 if __name__ == "__main__":
