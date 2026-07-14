@@ -1121,9 +1121,83 @@ def append_log_row(name: str, reason: str, other_reason: str, action: str, statu
                 notify_phone("Bauercrest: Signed OUT", f"{name}: {detail}")
             else:
                 notify_phone("Bauercrest: Signed IN", name)
+
+        # Handed back so the caller can offer an Undo on this exact row.
+        return row_dict["id"]
     except (APIError, GSpreadException):
         st.error("Could not record this sign-in/sign-out due to a problem talking to Google Sheets.")
         st.stop()
+
+
+# =================================================
+# UNDO
+# =================================================
+# How long an action stays undoable. The kiosk session stays open all day, so
+# without a window someone could hit Undo hours later and silently reverse a
+# DIFFERENT counselor's action. Two minutes covers "I just made a mistake".
+UNDO_WINDOW_SECONDS = 120
+
+
+def delete_log_row_by_id(row_id: str) -> bool:
+    """Delete one log row by its id. True if it was removed.
+
+    A real delete, not a reversing entry. An accidental sign-out should vanish
+    from the record, not leave a confusing OUT/IN pair that could also produce
+    a bogus lateness note.
+    """
+    row_id = str(row_id or "").strip()
+    if not row_id:
+        return False
+    try:
+        sheet = get_worksheet(SHEET_LOGS)
+        headers = get_log_headers()
+        id_col = (headers.index("id") + 1) if "id" in headers else 1
+
+        # Search the id COLUMN only. A whole-sheet search could land on the
+        # same string sitting in another column (a typed reason, a note) and
+        # then either delete the wrong row or refuse and quietly do nothing.
+        try:
+            cell = sheet.find(row_id, in_column=id_col)
+        except TypeError:
+            cell = sheet.find(row_id)
+            if cell and cell.col != id_col:
+                cell = None
+
+        if not cell or cell.col != id_col:
+            return False
+
+        sheet.delete_rows(cell.row)
+        clear_logs_cache()
+        return True
+    except Exception:
+        return False
+
+
+def set_pending_undo(row_id: str, desc: str):
+    """Remember the action just taken, so it can be undone for a short window."""
+    if not row_id:
+        return
+    st.session_state["undo_action"] = {
+        "id": row_id,
+        "desc": desc,
+        "at": datetime.now(TZ),
+    }
+
+
+def get_pending_undo():
+    """The action still inside its undo window, or None. Expires itself."""
+    u = st.session_state.get("undo_action")
+    if not u:
+        return None
+    try:
+        age = (datetime.now(TZ) - u["at"]).total_seconds()
+    except Exception:
+        st.session_state.pop("undo_action", None)
+        return None
+    if age > UNDO_WINDOW_SECONDS:
+        st.session_state.pop("undo_action", None)
+        return None
+    return u
 
 
 def clear_all_logs():
@@ -1749,6 +1823,25 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     if flash:
         flash_banner(flash)
 
+    # Undo sits right under the banner, so the person who just made the mistake
+    # sees it immediately. It disappears on its own after the window.
+    undo = get_pending_undo()
+    if undo:
+        left = int(UNDO_WINDOW_SECONDS - (datetime.now(TZ) - undo["at"]).total_seconds())
+        uc1, uc2 = st.columns([1, 3])
+        with uc1:
+            if st.button("Undo", key="undo_btn", use_container_width=True):
+                if delete_log_row_by_id(undo["id"]):
+                    notify_phone("Bauercrest: UNDO", f"Undo: {undo['desc']}")
+                    st.session_state["log_flash"] = f"Undone: {undo['desc']}"
+                else:
+                    st.session_state["log_flash"] = "Nothing to undo. That record is already gone."
+                st.session_state.pop("undo_action", None)
+                st.session_state["signio_nonce"] += 1
+                st.rerun()
+        with uc2:
+            st.caption(f"Undo {undo['desc']} — available for {max(left, 0)}s")
+
     st.caption("Type your code and press Enter. If you are in, you go out. If you are out, you come back in.")
 
     # Reason only matters when the code turns out to be a sign-out. It sits
@@ -1800,7 +1893,7 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
                     due = parse_due(info.get("due_back", ""))
                     mins = minutes_late(due)
                     late_note = f"LATE {mins} min" if mins > 0 else ""
-                    append_log_row(
+                    new_id = append_log_row(
                         name,
                         info.get("reason", ""),
                         info.get("other_reason", ""),
@@ -1808,6 +1901,7 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
                         status="IN",
                         late=late_note,
                     )
+                    set_pending_undo(new_id, f"{name}'s sign-in")
                     if mins > 0:
                         notify_phone(
                             "Bauercrest: Signed IN (LATE)",
@@ -1822,7 +1916,8 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
                     st.error("Please type a reason for 'Other'.")
                 else:
                     due = compute_due_back(reason, datetime.now(TZ))
-                    append_log_row(name, reason, other_reason, action="OUT", status="OUT", due_back=due)
+                    new_id = append_log_row(name, reason, other_reason, action="OUT", status="OUT", due_back=due)
+                    set_pending_undo(new_id, f"{name}'s sign-out")
                     st.session_state["log_flash"] = f"{name} signed OUT. Reason: {reason if reason != 'Other (type reason)' else other_reason}."
                     st.session_state["signio_nonce"] += 1
                     st.rerun()
