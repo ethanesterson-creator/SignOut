@@ -65,13 +65,14 @@ LOGS_HEADERS_REQUIRED = ["id", "timestamp", "name", "reason", "other_reason", "a
 PERIOD_OFF_GRACE_MIN = 5
 # Night Off: back by 12:15 AM the next morning.
 NIGHT_OFF_DUE = (0, 15)
-# Day Off: back by 7:45 AM the morning after.
+# Day Off: back by 7:45 AM the morning AFTER the day off.
 DAY_OFF_DUE = (7, 45)
-# A Day Off deadline must be at least this far away. Without this, someone who
-# leaves at 6:00 AM on their day off would be "due back" at 7:45 THAT SAME
-# morning and get flagged late within the hour. If the next 7:45 is sooner
-# than this, the deadline rolls to the following morning.
-DAY_OFF_MIN_LEAD_HOURS = 6
+# A day off is a full calendar day. Sign out before noon and the day off is
+# that same day (you left in the morning to start it). Sign out at noon or
+# later and the day off is the NEXT day (you left during or after today for
+# tomorrow's day off). Either way you are due back the morning after the day
+# off. Example: out Tuesday 9:50 PM -> day off Wednesday -> back Thursday 7:45.
+DAY_OFF_NEXTDAY_CUTOFF_HOUR = 12
 
 # Default camp schedule, used if the schedule tab is missing or empty. The tab
 # wins when present, so the office can change times without touching the code.
@@ -713,12 +714,15 @@ def compute_due_back(reason: str, now: datetime):
         return _next_clock_time(now, *NIGHT_OFF_DUE)
 
     if reason == "Day Off":
-        due = _next_clock_time(now, *DAY_OFF_DUE)
-        # If they left early in the morning, the next 7:45 is only an hour or
-        # two away. A day off means back the FOLLOWING morning, so roll it.
-        if (due - now) < timedelta(hours=DAY_OFF_MIN_LEAD_HOURS):
-            due = due + timedelta(days=1)
-        return due
+        # Which calendar day is the day off?
+        day_off_date = now.date()
+        if now.hour >= DAY_OFF_NEXTDAY_CUTOFF_HOUR:
+            day_off_date = day_off_date + timedelta(days=1)
+        # Back the morning AFTER the day off.
+        due_date = day_off_date + timedelta(days=1)
+        hh, mm = DAY_OFF_DUE
+        naive = datetime.combine(due_date, dtime(hh, mm))
+        return TZ.localize(naive) if now.tzinfo else naive
 
     if reason == "Period Off":
         today = now.date()
@@ -751,6 +755,28 @@ def parse_due(s):
         return dt
     except Exception:
         return None
+
+
+def effective_due_back(reason, signed_out_at):
+    """The deadline computed LIVE from the current reason and sign-out time.
+
+    The deadline used to be frozen into the due_back column at sign-out. So if
+    someone picked the wrong reason, fixing the reason in the sheet changed
+    nothing, because lateness read the stored deadline. Recomputing from the
+    reason (the label everyone sees) and the original sign-out timestamp makes
+    the reason the single source of truth: edit it in the sheet and lateness
+    corrects itself. The sign-out time is fixed, so the deadline never drifts.
+    """
+    ts = signed_out_at if isinstance(signed_out_at, datetime) else parse_due(signed_out_at)
+    if ts is None:
+        return None
+    return compute_due_back(str(reason or "").strip(), ts)
+
+
+def row_minutes_late(row, when=None) -> int:
+    """Minutes late for a log row, recomputing the deadline from its reason."""
+    due = effective_due_back(row.get("reason", ""), row.get("timestamp", ""))
+    return minutes_late(due, when)
 
 
 def minutes_late(due, when=None) -> int:
@@ -790,7 +816,7 @@ def check_late_and_alert(df_out: pd.DataFrame):
         new_alerts = []
         for _, row in df_out.iterrows():
             rid = str(row.get("id", "")).strip()
-            mins = minutes_late(parse_due(row.get("due_back", "")))
+            mins = row_minutes_late(row)
             if mins > 0 and rid and rid not in already:
                 notify_phone(
                     "Bauercrest: LATE",
@@ -1328,6 +1354,7 @@ def get_latest_status_map(df: pd.DataFrame) -> dict:
             "other_reason": str(r.get("other_reason", "")).strip(),
             "due_back": str(r.get("due_back", "")).strip(),
             "id": str(r.get("id", "")).strip(),
+            "timestamp": str(r.get("timestamp", "")).strip(),
         }
     return out
 
@@ -1746,9 +1773,9 @@ def render_out_cards(df_out: pd.DataFrame):
         details = esc(clean_other_reason(row.get("other_reason", "")))
         when = esc(format_board_time(row.get("timestamp")))
 
-        # Late = past their due-back time and still not signed in. The due time
-        # itself is never shown, only the fact that they are over.
-        mins = minutes_late(parse_due(row.get("due_back", "")))
+        # Late = past their due-back time and still not signed in. Recomputed
+        # from the current reason, so a reason edit in the sheet corrects it.
+        mins = row_minutes_late(row)
         is_late = mins > 0
 
         details_html = f"<div class='bc-meta'>{details}</div>" if details else ""
@@ -1888,9 +1915,9 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
 
                 if is_out:
                     # Currently out -> sign them back in, carrying their reason.
-                    # If they missed their deadline, stamp it on this row so the
-                    # record permanently shows they came back late.
-                    due = parse_due(info.get("due_back", ""))
+                    # Lateness is recomputed from the reason and the original
+                    # sign-out time, so a corrected reason gives a correct note.
+                    due = effective_due_back(info.get("reason", ""), info.get("timestamp", ""))
                     mins = minutes_late(due)
                     late_note = f"LATE {mins} min" if mins > 0 else ""
                     new_id = append_log_row(
@@ -2210,8 +2237,8 @@ def page_admin_history(staff_pins: dict):
             else:
                 row = df_out_now[df_out_now["name"] == who].iloc[0]
                 # An admin fixing the board must still record that they were
-                # late, otherwise the correction erases the lateness.
-                mins = minutes_late(parse_due(row.get("due_back", "")))
+                # late, recomputed from the current reason.
+                mins = row_minutes_late(row)
                 late_note = f"LATE {mins} min" if mins > 0 else ""
                 append_log_row(
                     who,
