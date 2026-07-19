@@ -33,6 +33,10 @@ SHEET_SCHEDULE = "schedule"  # auto-created; period start/end times for Period O
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
+# Hard timeout on every Google Sheets call, so a slow Google response can never
+# freeze the kiosk on a blank screen.
+SHEETS_TIMEOUT_SECONDS = 15
+
 REASONS = ["Period Off", "Day Off", "Night Off", "Other (type reason)"]
 
 VANS = ["Van 1", "Van 2", "Van 3"]
@@ -524,7 +528,19 @@ def normalize_weekday(s: str) -> str:
 def get_gspread_client():
     creds_info = dict(st.secrets["gcp_service_account"])
     creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
-    return gspread.authorize(creds)
+    client = gspread.authorize(creds)
+    # Give every Google Sheets call a hard timeout. Without this, a slow Google
+    # response hangs the whole kiosk on a blank "running..." screen with no way
+    # out but a reboot. With it, a slow call fails fast and the app recovers on
+    # the next tick instead of freezing.
+    try:
+        client.set_timeout(SHEETS_TIMEOUT_SECONDS)
+    except Exception:
+        try:
+            client.http_client.timeout = SHEETS_TIMEOUT_SECONDS
+        except Exception:
+            pass
+    return client
 
 
 @st.cache_resource
@@ -1484,6 +1500,42 @@ def auto_signin_for_van(party: list):
     return signed if ok else []
 
 
+def signin_everyone_on_van(van_name: str):
+    """Sign back in EVERYONE still stuck out under this van's tag.
+
+    This is what runs when a van is returned. Instead of trusting a stored
+    driver name from a possibly-stale frame, it reads the live state and clears
+    anyone whose current status is a Van sign-out for THIS van. That means a
+    returned van always frees whoever it stranded, no matter who drove it back,
+    so you stop having to admin-fix people. Returns the names signed in.
+    """
+    tag = f"{VAN_SIGNOUT_TAG}|{van_name}"
+    status_map = get_status_map_fresh()
+    rows = []
+    signed = []
+    for name, info in status_map.items():
+        name = (name or "").strip()
+        if not name:
+            continue
+        if (
+            info["status"] == "OUT"
+            and info["reason"] == "Van"
+            and info["other_reason"].strip() == tag
+        ):
+            rows.append({
+                "id": str(uuid.uuid4())[:8],
+                "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
+                "name": name,
+                "reason": "Van",
+                "other_reason": info["other_reason"],
+                "action": "IN",
+                "status": "IN",
+            })
+            signed.append(name)
+    append_log_rows_batch(rows)
+    return signed
+
+
 # =================================================
 # SPECIAL OPERATOR CODES (only you know these)
 # =================================================
@@ -2128,7 +2180,6 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
 
             last_purpose = ""
             last_other_purpose = ""
-            original_driver = ""
             try:
                 tmp = vans_df.copy()
                 tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
@@ -2139,7 +2190,6 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                     src = out_rows.iloc[-1] if not out_rows.empty else van_rows.iloc[-1]
                     last_purpose = str(src.get("purpose", "")).strip()
                     last_other_purpose = str(src.get("other_purpose", "")).strip()
-                    original_driver = str(src.get("driver", "")).strip()
             except Exception:
                 pass
 
@@ -2168,14 +2218,17 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 f"{van_label(van_to_in)} returned by {return_driver}, gas: {gas_left}",
             )
 
-            # Sign the driver back into camp. Only the driver the van signed
-            # out is touched. A hiccup here never undoes the sign-in or alert.
+            # Sign back in EVERYONE still stuck out under this van's tag, read
+            # live. Whoever the van stranded gets freed, no matter who drove it
+            # back, so the board stays correct without you admin-fixing anyone.
             try:
-                auto_signin_for_van([original_driver])
+                freed = signin_everyone_on_van(van_to_in)
             except Exception:
-                st.warning("Van signed in and alert sent, but linking the driver back to the Who's Out board hit a snag.")
+                freed = []
+                st.warning("Van signed in, but linking riders back to the Who's Out board hit a snag.")
 
-            st.session_state["van_flash"] = f"{van_label(van_to_in)} signed back in under {return_driver}. Gas: {gas_left}. Driver signed back in."
+            note = f" {len(freed)} signed back in." if freed else ""
+            st.session_state["van_flash"] = f"{van_label(van_to_in)} signed back in under {return_driver}. Gas: {gas_left}.{note}"
             st.rerun()
 
     crest_footer()
@@ -2313,13 +2366,11 @@ def page_admin_history(staff_pins: dict):
                     st.error("Could not sign the van in. Please try again.")
                     st.stop()
 
-                # Free the original driver on the camp board too, if the van
-                # had signed them out.
-                if orig_driver:
-                    try:
-                        auto_signin_for_van([orig_driver])
-                    except Exception:
-                        pass
+                # Free everyone stranded under this van's tag, read live.
+                try:
+                    signin_everyone_on_van(which_van)
+                except Exception:
+                    pass
 
                 notify_vans("Bauercrest: Van IN", f"{van_label(which_van)} signed in by admin {admin_name}")
                 st.session_state["admin_flash"] = f"{van_label(which_van)} signed in by {admin_name}."
@@ -2542,11 +2593,15 @@ def ensure_headers_once():
 
     Headers used to be re-checked on every read and write, a network call each
     time. They only need checking once, so this runs at startup and then never
-    again for the session. If it repairs anything, the cached header lists are
-    cleared so the corrected order is picked up.
+    again for the session. Wrapped and time-boxed so a slow Google response
+    cannot freeze the kiosk on a blank screen; if it does not finish, the app
+    still loads and the write paths ensure headers anyway.
     """
     if st.session_state.get("_headers_ensured"):
         return
+    # Mark done FIRST. If a call below is slow and the user reloads, we do not
+    # want to re-run this heavy startup step every time.
+    st.session_state["_headers_ensured"] = True
     try:
         ensure_logs_header(get_worksheet(SHEET_LOGS))
         ensure_vans_header(get_vans_sheet())
@@ -2555,7 +2610,6 @@ def ensure_headers_once():
         get_van_headers.clear()
     except Exception:
         pass
-    st.session_state["_headers_ensured"] = True
 
 
 def main():
