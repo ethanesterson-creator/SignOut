@@ -241,6 +241,112 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     margin: 0 0 0.7rem 0;
 }}
 
+/* Big, unmistakable section banners. Counselors read these from a step away,
+   so nobody signs a van out when they meant to sign one in. */
+.bc-banner {{
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    border-radius: 12px;
+    padding: 0.9rem 1.2rem;
+    margin: 0.2rem 0 0.9rem 0;
+}}
+.bc-banner .bc-banner-word {{
+    font-family: 'Archivo', sans-serif;
+    font-size: 1.9rem;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    line-height: 1;
+}}
+.bc-banner .bc-banner-sub {{
+    font-family: 'Public Sans', sans-serif;
+    font-size: 0.95rem;
+    font-weight: 600;
+    opacity: 0.9;
+}}
+.bc-banner-out {{
+    background: var(--navy);
+    color: {WHITE};
+}}
+.bc-banner-out .bc-banner-word,
+.bc-banner-out .bc-banner-sub {{ color: {WHITE}; }}
+.bc-banner-in {{
+    background: #E7F4EA;
+    border: 2px solid #2E7D32;
+    color: #1B5E20;
+}}
+.bc-banner-in .bc-banner-word,
+.bc-banner-in .bc-banner-sub {{ color: #1B5E20; }}
+
+/* Van picker tiles. These are the whole interface: pick the van, the app
+   decides whether you are taking it or returning it. */
+.bc-vangrid {{
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 0.7rem;
+    margin-bottom: 0.5rem;
+}}
+.bc-vantile {{
+    border-radius: 14px;
+    padding: 1rem 1.1rem;
+    border: 2px solid var(--line);
+    background: {WHITE};
+}}
+.bc-vantile-state {{
+    font-family: 'Archivo', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    opacity: 0.85;
+}}
+.bc-vantile-name {{
+    font-family: 'Archivo', sans-serif;
+    font-size: 1.35rem;
+    font-weight: 800;
+    margin: 0.15rem 0 0.1rem 0;
+}}
+.bc-vantile-who {{ font-size: 0.92rem; font-weight: 600; opacity: 0.9; }}
+.bc-vantile-action {{ font-size: 0.85rem; margin-top: 0.35rem; opacity: 0.8; }}
+.bc-vantile-in {{ border-color: #2E7D32; background: #E7F4EA; color: #1B5E20; }}
+.bc-vantile-out {{ background: var(--navy); border-color: var(--navy-deep); color: {WHITE}; }}
+.bc-vantile-sel {{ box-shadow: 0 0 0 4px rgba(19,41,75,0.25); }}
+
+/* Big confirmation banner. Deliberately loud: a counselor who typed their
+   code must SEE which direction they just went. */
+@keyframes bcBigFlash {{
+    0% {{ opacity: 0; transform: translateY(-6px); }}
+    8% {{ opacity: 1; transform: translateY(0); }}
+    100% {{ opacity: 1; }}
+}}
+.bc-bigflash {{
+    border-radius: 14px;
+    padding: 1.1rem 1.3rem;
+    margin-bottom: 0.9rem;
+    animation: bcBigFlash 0.35s ease forwards;
+}}
+.bc-bigflash-word {{
+    font-family: 'Archivo', sans-serif;
+    font-size: 2rem;
+    font-weight: 800;
+    line-height: 1.1;
+}}
+.bc-bigflash-sub {{
+    font-family: 'Public Sans', sans-serif;
+    font-size: 1.02rem;
+    font-weight: 600;
+    margin-top: 0.25rem;
+}}
+.bc-bigflash-in {{ background: #E7F4EA; border: 3px solid #2E7D32; color: #14521A; }}
+.bc-bigflash-out {{ background: var(--navy); border: 3px solid var(--navy-deep); color: {WHITE}; }}
+.bc-bigflash-ask {{
+    margin-top: 0.6rem;
+    padding-top: 0.5rem;
+    border-top: 2px solid rgba(0,0,0,0.15);
+    font-family: 'Archivo', sans-serif;
+    font-size: 1.05rem;
+    font-weight: 800;
+}}
+
 .bc-grid {{
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
@@ -304,6 +410,23 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
 .bc-card.bc-card-late .bc-time {{ color: #8C3A33; }}
 .bc-chip.bc-chip-late {{
     background: #B3261E;
+    color: {WHITE};
+    margin-left: 0.3rem;
+}}
+
+/* Probably-forgot zone: muted amber, not alarming red. These need cleanup,
+   not urgency, and they must not compete with someone genuinely late now. */
+.bc-card.bc-card-forgot {{
+    background: #FBF3E4;
+    border: 1px solid #B07A1E;
+    border-top: 4px solid #B07A1E;
+    opacity: 0.95;
+}}
+.bc-card.bc-card-forgot .bc-name {{ color: #6B4A0F; }}
+.bc-card.bc-card-forgot .bc-meta,
+.bc-card.bc-card-forgot .bc-time {{ color: #7C5A1C; }}
+.bc-chip.bc-chip-forgot {{
+    background: #B07A1E;
     color: {WHITE};
     margin-left: 0.3rem;
 }}
@@ -437,6 +560,23 @@ def section_title(title: str):
     st.markdown(f"<div class='bc-sectiontitle'>{esc(title)}</div>", unsafe_allow_html=True)
 
 
+def big_banner(word: str, sub: str, kind: str = "out"):
+    """Large color-coded section banner.
+
+    Navy for leaving, green for returning. The point is that a counselor
+    glancing at the screen knows which half of the page they are in without
+    reading small text.
+    """
+    cls = "bc-banner-in" if kind == "in" else "bc-banner-out"
+    st.markdown(
+        f"<div class='bc-banner {cls}'>"
+        f"<div class='bc-banner-word'>{esc(word)}</div>"
+        f"<div class='bc-banner-sub'>{esc(sub)}</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def empty_note(text: str):
     st.markdown(f"<div class='bc-empty'>{esc(text)}</div>", unsafe_allow_html=True)
 
@@ -444,6 +584,30 @@ def empty_note(text: str):
 def flash_banner(msg: str):
     """Inline green confirmation that fades out on its own after ~2 seconds."""
     st.markdown(f"<div class='bc-flash'>{esc(msg)}</div>", unsafe_allow_html=True)
+
+
+def big_flash(msg: str, kind: str = "in", word: str = "", ask: str = ""):
+    """Loud confirmation banner. Does NOT fade.
+
+    A counselor who typed their code has to see which direction they went. The
+    dangerous case is someone who forgot to sign in days ago, walks up meaning
+    to sign OUT, and the toggle signs them IN instead. A small green line is
+    easy to miss. This is not.
+
+    ask is an extra line for exactly that case, telling them to type again if
+    they actually meant to leave.
+    """
+    cls = "bc-bigflash-in" if kind == "in" else "bc-bigflash-out"
+    headline = word or ("SIGNED IN" if kind == "in" else "SIGNED OUT")
+    ask_html = f"<div class='bc-bigflash-ask'>{esc(ask)}</div>" if ask else ""
+    st.markdown(
+        f"<div class='bc-bigflash {cls}'>"
+        f"<div class='bc-bigflash-word'>{esc(headline)}</div>"
+        f"<div class='bc-bigflash-sub'>{esc(msg)}</div>"
+        f"{ask_html}"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def crest_footer():
@@ -805,6 +969,12 @@ def minutes_late(due, when=None) -> int:
 
 
 LATE_ALERT_KEY = "late_alerted"
+
+# Past this many minutes overdue, a person almost certainly forgot to sign in
+# rather than being genuinely late. Their card drops to a separate zone at the
+# bottom of the board and stops showing a meaningless minute count. Nothing is
+# deleted. Change this one number to move the line.
+FORGOT_THRESHOLD_MINUTES = 180
 
 
 def check_late_and_alert(df_out: pd.DataFrame):
@@ -1773,13 +1943,15 @@ def compute_van_status(vans_df: pd.DataFrame) -> dict:
     if vans_df is None or vans_df.empty:
         return status_map
 
-    for col in ["timestamp", "van", "status", "driver", "purpose", "passengers", "other_purpose", "action"]:
-        if col not in vans_df.columns:
-            vans_df[col] = ""
-
     tmp = vans_df.copy()
-    tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
-    tmp = tmp.sort_values("timestamp", na_position="last")
+    for col in ["timestamp", "van", "status", "driver", "purpose", "passengers", "other_purpose", "action"]:
+        if col not in tmp.columns:
+            tmp[col] = ""
+
+    # Same robust ordering used for people. Without this a single unreadable
+    # timestamp sorted NEWEST and won, freezing a van as OUT forever, and a
+    # checkout and checkin written in the same second were a coin flip.
+    tmp = _sorted_by_recency(tmp)
 
     for v in VANS:
         rows = tmp[tmp["van"] == v]
@@ -1816,7 +1988,7 @@ def clean_other_reason(other_reason: str) -> str:
     return s
 
 
-def render_out_cards(df_out: pd.DataFrame):
+def render_out_cards(df_out: pd.DataFrame, forgot_zone: bool = False):
     cards = []
     df = df_out.sort_values("timestamp")
     for _, row in df.iterrows():
@@ -1831,8 +2003,17 @@ def render_out_cards(df_out: pd.DataFrame):
         is_late = mins > 0
 
         details_html = f"<div class='bc-meta'>{details}</div>" if details else ""
-        late_chip = f"<div class='bc-chip bc-chip-late'>LATE {mins} MIN</div>" if is_late else ""
-        card_cls = "bc-card bc-card-late" if is_late else "bc-card"
+
+        if forgot_zone:
+            # A count in the thousands tells you nothing. Say what it means.
+            late_chip = "<div class='bc-chip bc-chip-forgot'>NO SIGN-IN</div>"
+            card_cls = "bc-card bc-card-forgot"
+        elif is_late:
+            late_chip = f"<div class='bc-chip bc-chip-late'>LATE {mins} MIN</div>"
+            card_cls = "bc-card bc-card-late"
+        else:
+            late_chip = ""
+            card_cls = "bc-card"
 
         cards.append(
             f"<div class='{card_cls}'>"
@@ -1900,7 +2081,12 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
 
     flash = st.session_state.pop("log_flash", "")
     if flash:
-        flash_banner(flash)
+        big_flash(
+            flash,
+            st.session_state.pop("log_flash_kind", "in"),
+            st.session_state.pop("log_flash_word", ""),
+            st.session_state.pop("log_flash_ask", ""),
+        )
 
     # Undo sits right under the banner, so the person who just made the mistake
     # sees it immediately. It disappears on its own after the window.
@@ -1921,11 +2107,26 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
         with uc2:
             st.caption(f"Undo {undo['desc']} — available for {max(left, 0)}s")
 
-    st.caption("Type your code and press Enter. If you are in, you go out. If you are out, you come back in.")
+    # One box does both, so spell out both directions in large type. A
+    # counselor glancing at the screen sees what typing their code will do.
+    st.markdown(
+        "<div style='display:flex;gap:0.7rem;margin:0.2rem 0 0.9rem 0;'>"
+        "<div class='bc-banner bc-banner-out' style='flex:1;margin:0;'>"
+        "<div class='bc-banner-word'>SIGNING OUT?</div>"
+        "<div class='bc-banner-sub'>Pick your reason below, then type your code</div>"
+        "</div>"
+        "<div class='bc-banner bc-banner-in' style='flex:1;margin:0;'>"
+        "<div class='bc-banner-word'>COMING BACK?</div>"
+        "<div class='bc-banner-sub'>Type your code. Skip the reason</div>"
+        "</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    st.caption("One box does both. If you are in camp you go out. If you are out you come back in.")
 
     # Reason only matters when the code turns out to be a sign-out. It sits
     # above the box and is read only if the person is currently in.
-    reason = st.selectbox("Reason (only used if you are signing out)", REASONS, key="signout_reason")
+    reason = st.selectbox("Reason (only used if you are signing OUT)", REASONS, key="signout_reason")
     other_reason = ""
     if reason == "Other (type reason)":
         other_reason = st.text_input("Type your reason", key="signout_other_reason")
@@ -1981,14 +2182,23 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
                         late=late_note,
                     )
                     set_pending_undo(new_id, f"{name}'s sign-in")
-                    if mins > 0:
+                    st.session_state["log_flash_kind"] = "in"
+                    st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED IN"
+
+                    # If they were out far past their deadline they almost
+                    # certainly forgot to sign in, and may have walked up now
+                    # meaning to sign OUT. Say so, loudly.
+                    if mins >= FORGOT_THRESHOLD_MINUTES:
+                        st.session_state["log_flash"] = "You were still signed out from earlier, so this signed you back IN."
+                        st.session_state["log_flash_ask"] = "Trying to sign OUT? Type your code again."
+                    elif mins > 0:
                         notify_phone(
                             "Bauercrest: Signed IN (LATE)",
                             f"{name} signed in {mins} min late ({info.get('reason','')})",
                         )
-                        st.session_state["log_flash"] = f"{name} signed IN. LATE by {mins} min."
+                        st.session_state["log_flash"] = f"Welcome back. You were {mins} min late."
                     else:
-                        st.session_state["log_flash"] = f"{name} signed IN. Welcome back."
+                        st.session_state["log_flash"] = "Welcome back to camp."
                     st.session_state["signio_nonce"] += 1
                     st.rerun()
                 elif reason == "Other (type reason)" and not other_reason.strip():
@@ -1997,7 +2207,9 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
                     due = compute_due_back(reason, datetime.now(TZ))
                     new_id = append_log_row(name, reason, other_reason, action="OUT", status="OUT", due_back=due)
                     set_pending_undo(new_id, f"{name}'s sign-out")
-                    st.session_state["log_flash"] = f"{name} signed OUT. Reason: {reason if reason != 'Other (type reason)' else other_reason}."
+                    st.session_state["log_flash_kind"] = "out"
+                    st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED OUT"
+                    st.session_state["log_flash"] = f"Reason: {reason if reason != 'Other (type reason)' else other_reason}. Sign back in when you return."
                     st.session_state["signio_nonce"] += 1
                     st.rerun()
 
@@ -2019,10 +2231,28 @@ def page_whos_out():
         # one-minute tick, deduped in the sheet so it fires only once.
         check_late_and_alert(df_out)
 
+        # Split the board. Someone hours past their deadline almost certainly
+        # forgot to sign in, and a huge minute count buries the person who is
+        # genuinely late right now. Nothing is deleted, it just moves down.
         if df_out.empty:
             empty_note("No staff are currently signed out.")
         else:
-            render_out_cards(df_out)
+            forgot_mask = df_out.apply(
+                lambda r: row_minutes_late(r) >= FORGOT_THRESHOLD_MINUTES, axis=1
+            )
+            active = df_out[~forgot_mask]
+            forgot = df_out[forgot_mask]
+
+            if active.empty:
+                empty_note("No staff are currently signed out.")
+            else:
+                render_out_cards(active)
+
+            if not forgot.empty:
+                st.markdown("")
+                section_title(f"Probably Forgot To Sign In ({len(forgot)})")
+                st.caption("No sign-in recorded well past their return time. An admin can clear these on the Admin page.")
+                render_out_cards(forgot, forgot_zone=True)
 
         # Day Off board (display only). Reads the days_off sheet. The app never
         # signs anyone out automatically; this is a reminder of who is scheduled.
@@ -2037,6 +2267,47 @@ def page_whos_out():
     crest_footer()
 
 
+def van_out_since(vans_df, van_name):
+    """Who took this van and when, from its latest checkout row."""
+    try:
+        tmp = _sorted_by_recency(vans_df)
+        rows = tmp[tmp["van"] == van_name]
+        if rows.empty:
+            return "", None
+        outs = rows[rows["status"].astype(str).str.upper() == "OUT"]
+        src = outs.iloc[-1] if not outs.empty else rows.iloc[-1]
+        return str(src.get("driver", "")).strip(), src.get("timestamp")
+    except Exception:
+        return "", None
+
+
+def render_van_tiles(status_map: dict, selected: str = ""):
+    """The van picker. Each van is one tile showing its state.
+
+    This IS the interface now. There is no separate sign-out form and sign-in
+    form to choose between. You pick the van you are dealing with and the app
+    works out whether you are taking it or bringing it back.
+    """
+    tiles = []
+    for v in VANS:
+        info = status_map.get(v, {"status": "IN"})
+        out = info.get("status") == "OUT"
+        sel = " bc-vantile-sel" if v == selected else ""
+        state_cls = "bc-vantile-out" if out else "bc-vantile-in"
+        state_word = "OUT" if out else "AT CAMP"
+        action = "Tap to bring back" if out else "Tap to take out"
+        who = f"<div class='bc-vantile-who'>{esc(info.get('driver',''))}</div>" if out and info.get("driver") else ""
+        tiles.append(
+            f"<div class='bc-vantile {state_cls}{sel}'>"
+            f"<div class='bc-vantile-state'>{state_word}</div>"
+            f"<div class='bc-vantile-name'>{esc(van_label(v))}</div>"
+            f"{who}"
+            f"<div class='bc-vantile-action'>{action}</div>"
+            f"</div>"
+        )
+    st.markdown(f"<div class='bc-vangrid'>{''.join(tiles)}</div>", unsafe_allow_html=True)
+
+
 def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
     page_title("Camp Vehicles", "Vans")
 
@@ -2046,57 +2317,161 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
 
     flash = st.session_state.pop("van_flash", "")
     if flash:
-        flash_banner(flash)
+        big_flash(flash, "in")
 
     vans_df = load_vans_df_cached()
     status_map = compute_van_status(vans_df)
-    out_vans = [v for v in VANS if status_map.get(v, {}).get("status") == "OUT"]
-    free_vans = [v for v in VANS if status_map.get(v, {}).get("status") != "OUT"]
 
-    @st.fragment(run_every=BOARD_REFRESH_SECONDS)
-    def live_van_status():
-        # Flip to the red screen if an emergency is declared elsewhere.
-        escalate_if_emergency_changed("normal")
-        fresh = compute_van_status(load_vans_df_cached())
-        section_title("Van Status")
-        render_van_cards(fresh)
+    selected = st.session_state.get("van_selected", "")
+    # A van that got signed in or out elsewhere should not stay selected.
+    if selected and selected not in VANS:
+        selected = ""
 
-    live_van_status()
+    st.caption("Tap the van you are dealing with. The app knows if you are taking it out or bringing it back.")
+    render_van_tiles(status_map, selected)
 
+    # The tiles above are the display. These buttons sit directly under them
+    # and are what actually gets tapped, one per van, in the same order.
+    cols = st.columns(len(VANS))
+    for i, v in enumerate(VANS):
+        with cols[i]:
+            if st.button(van_label(v), key=f"vanpick_{v}", use_container_width=True):
+                st.session_state["van_selected"] = v
+                st.rerun()
+
+    if not selected:
+        st.divider()
+        empty_note("Pick a van above to take one out or bring one back.")
+        crest_footer()
+        return
+
+    is_out = status_map.get(selected, {}).get("status") == "OUT"
     st.divider()
-    section_title("Sign Out a Van")
 
-    if not free_vans:
-        st.warning("No vans available. All vans are currently out.")
+    # ---------------- BRING A VAN BACK ----------------
+    if is_out:
+        took_driver, took_at = van_out_since(vans_df, selected)
+        sub = f"Taken by {took_driver}" if took_driver else "Bringing it back to camp"
+        if took_at is not None:
+            when = format_board_time(pd.to_datetime(took_at, errors="coerce"))
+            if when:
+                sub += f" at {when}"
+        big_banner(f"BRINGING BACK {van_label(selected).upper()}", sub, "in")
+
+        pin_lookup_in = build_pin_lookup(staff_pins)
+        with st.form(f"van_back_form_{van_nonce}", clear_on_submit=True):
+            back_code = st.text_input("Your code", type="password", max_chars=4)
+            gas_left = st.selectbox("Gas left", ["Full", "3/4", "Half", "1/4", "Low / Empty"])
+            back_go = st.form_submit_button(f"Bring {van_label(selected)} Back", use_container_width=True)
+
+        if st.button("Pick a different van", key="van_cancel_in"):
+            st.session_state["van_selected"] = ""
+            st.rerun()
+
+        if back_go:
+            def do_bring_back():
+                # The driving is done, so any active staff code can return a
+                # van. Taking one OUT still requires a tested driver.
+                who, err = resolve_code(back_code, pin_lookup_in)
+                if err:
+                    st.error(err)
+                    return
+
+                fresh_df = load_vans_df_cached()
+                if compute_van_status(fresh_df).get(selected, {}).get("status") != "OUT":
+                    st.error(f"{van_label(selected)} is already signed in.")
+                    return
+
+                last_purpose = ""
+                last_other = ""
+                try:
+                    tmp = _sorted_by_recency(fresh_df)
+                    vr = tmp[tmp["van"] == selected]
+                    if not vr.empty:
+                        outs = vr[vr["status"].astype(str).str.upper() == "OUT"]
+                        src = outs.iloc[-1] if not outs.empty else vr.iloc[-1]
+                        last_purpose = str(src.get("purpose", "")).strip()
+                        last_other = str(src.get("other_purpose", "")).strip()
+                except Exception:
+                    pass
+
+                row = {
+                    "id": str(uuid.uuid4())[:8],
+                    "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
+                    "van": selected,
+                    "driver": who,
+                    "purpose": last_purpose,
+                    "passengers": "",
+                    "other_purpose": last_other,
+                    "action": "CHECKIN",
+                    "status": "IN",
+                    "gas_left": gas_left,
+                }
+                try:
+                    append_vans_row(row)
+                except Exception:
+                    st.error("Could not save the van sign-in. Please try again.")
+                    return
+
+                notify_vans(
+                    "Bauercrest: Van IN",
+                    f"{van_label(selected)} returned by {who}, gas: {gas_left}",
+                )
+
+                # Free everyone the van stranded on the camp board, read live.
+                try:
+                    freed = signin_everyone_on_van(selected)
+                except Exception:
+                    freed = []
+                    st.warning("Van signed in, but linking riders back to the Who's Out board hit a snag.")
+
+                # The person returning it is back at camp too, even if they
+                # were not the one the van signed out.
+                try:
+                    if who not in freed:
+                        info = get_status_fresh(who)
+                        if info and info["status"] == "OUT" and info["reason"] == "Van":
+                            append_log_row(who, "Van", info["other_reason"], action="IN", status="IN", notify=False)
+                            freed = freed + [who]
+                except Exception:
+                    pass
+
+                note = f" {len(freed)} signed back in at camp." if freed else ""
+                st.session_state["van_form_nonce"] += 1
+                st.session_state["van_selected"] = ""
+                st.session_state["van_flash"] = f"{van_label(selected)} is back. Gas: {gas_left}.{note}"
+                st.rerun()
+
+            do_bring_back()
+
+    # ---------------- TAKE A VAN OUT ----------------
     else:
-        # IMPORTANT: check eligibility OUTSIDE the form to avoid "missing submit button" warning
+        big_banner(f"TAKING OUT {van_label(selected).upper()}", "Signing this van off camp", "out")
+
         if not driver_names:
             st.warning("No eligible drivers found. Set drivers.passed_test=TRUE for cleared drivers.")
-        else:
-            pin_lookup = build_pin_lookup(staff_pins)
-            with st.form("van_signout_form", clear_on_submit=False):
-                st.caption("Pick the van and type your driver code. Passengers sign themselves out on the main page.")
-                chosen_van = st.selectbox(
-                    "Which van are you taking?",
-                    free_vans,
-                    format_func=van_label,
-                    key=f"van_choice_{van_nonce}",
-                )
-                driver_code = st.text_input(
-                    "Driver code",
-                    type="password",
-                    max_chars=4,
-                    key=f"van_driver_code_{van_nonce}",
-                )
-                purpose = st.selectbox("Purpose", VAN_PURPOSES, key=f"van_purpose_{van_nonce}")
+            if st.button("Pick a different van", key="van_cancel_nodrv"):
+                st.session_state["van_selected"] = ""
+                st.rerun()
+            crest_footer()
+            return
 
-                other_purpose = ""
-                if purpose == "Other":
-                    other_purpose = st.text_input("Other purpose (required)", key=f"van_other_purpose_{van_nonce}")
+        pin_lookup = build_pin_lookup(staff_pins)
+        with st.form(f"van_take_form_{van_nonce}", clear_on_submit=False):
+            st.caption("You will be signed out of camp automatically. Passengers sign themselves out on the main page.")
+            driver_code = st.text_input("Driver code", type="password", max_chars=4)
+            purpose = st.selectbox("Purpose", VAN_PURPOSES)
+            other_purpose = ""
+            if purpose == "Other":
+                other_purpose = st.text_input("Other purpose (required)")
+            take_go = st.form_submit_button(f"Take {van_label(selected)} Out", use_container_width=True)
 
-                submitted = st.form_submit_button("Sign Out Van", use_container_width=True)
+        if st.button("Pick a different van", key="van_cancel_out"):
+            st.session_state["van_selected"] = ""
+            st.rerun()
 
-            if submitted:
+        if take_go:
+            def do_take_out():
                 driver, err = resolve_code(driver_code, pin_lookup)
                 if err:
                     st.error(err)
@@ -2107,9 +2482,8 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                     return
 
                 # Guard against two people grabbing the same van at once.
-                fresh_status = compute_van_status(load_vans_df_cached())
-                if fresh_status.get(chosen_van, {}).get("status") == "OUT":
-                    st.error(f"{van_label(chosen_van)} was taken a moment ago. Pick another van.")
+                if compute_van_status(load_vans_df_cached()).get(selected, {}).get("status") == "OUT":
+                    st.error(f"{van_label(selected)} was taken a moment ago. Pick another van.")
                     return
 
                 if purpose == "Other" and not other_purpose.strip():
@@ -2119,7 +2493,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 row = {
                     "id": str(uuid.uuid4())[:8],
                     "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
-                    "van": chosen_van,
+                    "van": selected,
                     "driver": driver,
                     "purpose": purpose,
                     "passengers": "",
@@ -2133,106 +2507,25 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                     st.error("Could not save the van checkout. Please try again.")
                     return
 
-                # Van is saved. Push to the vans phone right away, before the
-                # camp-board link, so nothing downstream can block the alert.
-                purpose_text = other_purpose.strip() if (purpose == "Other" and other_purpose.strip()) else purpose
-                notify_vans(
-                    "Bauercrest: Van OUT",
-                    f"{van_label(chosen_van)} - {driver} ({purpose_text})",
-                )
+                ptext = other_purpose.strip() if (purpose == "Other" and other_purpose.strip()) else purpose
+                notify_vans("Bauercrest: Van OUT", f"{van_label(selected)} - {driver} ({ptext})")
 
-                # Sign the driver out of camp. A hiccup here never undoes the
-                # van checkout or the alert above.
+                # Sign the driver out of camp so the board matches the van.
+                camp_note = ""
                 try:
-                    auto_signout_for_van([driver], chosen_van)
+                    signed = auto_signout_for_van([driver], selected)
+                    camp_note = f" {driver} signed out of camp." if signed else f" {driver} was already signed out."
                 except Exception:
                     st.warning("Van saved and alert sent, but linking the driver to the Who's Out board hit a snag.")
 
                 st.session_state["van_form_nonce"] += 1
-                st.session_state["van_flash"] = f"{van_label(chosen_van)} signed out under {driver}. Driver signed out of camp."
+                st.session_state["van_selected"] = ""
+                st.session_state["van_flash"] = f"{van_label(selected)} is out under {driver}.{camp_note}"
                 st.rerun()
 
-    # Sign IN section
-    if out_vans:
-        st.divider()
-        section_title("Sign In a Van")
-
-        pin_lookup_in = build_pin_lookup(staff_pins)
-        with st.form("van_signin_form", clear_on_submit=True):
-            st.caption("Pick the van you are returning, type your code, set the gas left, and submit.")
-            van_to_in = st.selectbox(
-                "Which van are you signing back in?",
-                out_vans,
-                format_func=van_label,
-            )
-            return_driver_code = st.text_input("Your code", type="password", max_chars=4)
-            gas_left = st.selectbox("Gas left", ["Full", "3/4", "Half", "1/4", "Low / Empty"])
-            submitted_in = st.form_submit_button("Sign In Van", use_container_width=True)
-
-        if submitted_in:
-            # Signing a van back in records its return. The driving is already
-            # done, so any recognized active staff code works here. Taking a
-            # van OUT still requires a driving-tested driver.
-            return_driver, err = resolve_code(return_driver_code, pin_lookup_in)
-            if err:
-                st.error(err)
-                return
-
-            last_purpose = ""
-            last_other_purpose = ""
-            try:
-                tmp = vans_df.copy()
-                tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
-                tmp = tmp.sort_values("timestamp", na_position="last")
-                van_rows = tmp[tmp["van"] == van_to_in]
-                if not van_rows.empty:
-                    out_rows = van_rows[van_rows["status"].astype(str).str.upper() == "OUT"]
-                    src = out_rows.iloc[-1] if not out_rows.empty else van_rows.iloc[-1]
-                    last_purpose = str(src.get("purpose", "")).strip()
-                    last_other_purpose = str(src.get("other_purpose", "")).strip()
-            except Exception:
-                pass
-
-            row = {
-                "id": str(uuid.uuid4())[:8],
-                "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
-                "van": van_to_in,
-                "driver": return_driver,
-                "purpose": last_purpose,
-                "passengers": "",
-                "other_purpose": last_other_purpose,
-                "action": "CHECKIN",
-                "status": "IN",
-                "gas_left": gas_left,
-            }
-            try:
-                append_vans_row(row)
-            except Exception:
-                st.error("Could not save the van sign-in. Please try again.")
-                return
-
-            # Van is saved. Push to the vans phone right away, with the gas
-            # level, before the camp-board link.
-            notify_vans(
-                "Bauercrest: Van IN",
-                f"{van_label(van_to_in)} returned by {return_driver}, gas: {gas_left}",
-            )
-
-            # Sign back in EVERYONE still stuck out under this van's tag, read
-            # live. Whoever the van stranded gets freed, no matter who drove it
-            # back, so the board stays correct without you admin-fixing anyone.
-            try:
-                freed = signin_everyone_on_van(van_to_in)
-            except Exception:
-                freed = []
-                st.warning("Van signed in, but linking riders back to the Who's Out board hit a snag.")
-
-            note = f" {len(freed)} signed back in." if freed else ""
-            st.session_state["van_flash"] = f"{van_label(van_to_in)} signed back in under {return_driver}. Gas: {gas_left}.{note}"
-            st.rerun()
+            do_take_out()
 
     crest_footer()
-
 
 def page_admin_history(staff_pins: dict):
     page_title("Office Use Only", "Admin / History")
