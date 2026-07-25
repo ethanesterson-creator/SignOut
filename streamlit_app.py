@@ -746,9 +746,14 @@ def set_emergency_flag(on: bool):
     """Write the campwide emergency flag. Every kiosk reads this on refresh."""
     try:
         sheet = get_settings_sheet()
-        cell = sheet.find("emergency")
+        try:
+            cell = sheet.find("emergency", in_column=1)
+        except TypeError:
+            cell = sheet.find("emergency")
+            if cell and cell.col != 1:
+                cell = None
         value = "TRUE" if on else "FALSE"
-        if cell:
+        if cell and cell.col == 1:
             sheet.update_cell(cell.row, 2, value)
         else:
             sheet.append_row(["emergency", value])
@@ -786,8 +791,15 @@ def set_setting(key: str, value: str):
     """Write any key/value into the settings tab."""
     try:
         sheet = get_settings_sheet()
-        cell = sheet.find(key)
-        if cell:
+        # Match the KEY column only. A whole-sheet find could land on the same
+        # text sitting in a value cell and overwrite the wrong row.
+        try:
+            cell = sheet.find(key, in_column=1)
+        except TypeError:
+            cell = sheet.find(key)
+            if cell and cell.col != 1:
+                cell = None
+        if cell and cell.col == 1:
             sheet.update_cell(cell.row, 2, value)
         else:
             sheet.append_row([key, value])
@@ -964,6 +976,16 @@ def minutes_late(due, when=None) -> int:
     if not due:
         return 0
     when = when or datetime.now(TZ)
+    # Never let a naive/aware mix throw. A raw TypeError here would be swallowed
+    # by the board's guard and quietly show a late person as on time. Localize
+    # anything naive to camp time so the comparison is always valid.
+    try:
+        if due.tzinfo is None:
+            due = TZ.localize(due)
+        if when.tzinfo is None:
+            when = TZ.localize(when)
+    except Exception:
+        return 0
     delta = (when - due).total_seconds()
     return int(delta // 60) if delta > 0 else 0
 
@@ -1324,6 +1346,7 @@ def append_log_row(name: str, reason: str, other_reason: str, action: str, statu
         row = [row_dict.get(h, "") for h in headers]
         sheet.append_row(row)
         clear_logs_cache()
+        remember_status(name, status, reason, other_reason)
 
         # Phone push after a clean write. Sign-out shows the reason; the typed
         # detail wins when the reason is Other.
@@ -1348,6 +1371,11 @@ def append_log_row(name: str, reason: str, other_reason: str, action: str, statu
 # without a window someone could hit Undo hours later and silently reverse a
 # DIFFERENT counselor's action. Two minutes covers "I just made a mistake".
 UNDO_WINDOW_SECONDS = 120
+
+# How long a tapped van stays selected before the page resets itself. The
+# kiosk is shared, so a van picked by someone who wandered off must not still
+# be waiting when the next counselor walks up.
+VAN_SELECT_TIMEOUT_SECONDS = 90
 
 
 def delete_log_row_by_id(row_id: str) -> bool:
@@ -1522,6 +1550,83 @@ def get_currently_out(df: pd.DataFrame) -> pd.DataFrame:
 VAN_SIGNOUT_TAG = "VAN_TRIP"
 
 
+# =================================================
+# WRITE MEMORY (fixes "the app forgot who is in/out")
+# =================================================
+# Google Sheets lags a moment behind a write. The app can append a sign-out row
+# and then, a heartbeat later, re-read the sheet and get back data that does
+# not yet include that row, so it thinks the person never signed out. To stop
+# that, every write this session makes is remembered locally for a short time
+# and merged into every status read. The app always trusts what it just did,
+# even if Google has not caught up yet.
+RECENT_WRITE_TTL_SECONDS = 45
+
+
+def remember_status(name: str, status: str, reason: str = "", other_reason: str = ""):
+    name = str(name or "").strip()
+    if not name:
+        return
+    d = st.session_state.get("recent_status", {})
+    d[name] = {
+        "status": str(status or "").strip().upper(),
+        "reason": reason or "",
+        "other_reason": other_reason or "",
+        "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
+        "at": datetime.now(TZ),
+    }
+    st.session_state["recent_status"] = d
+
+
+def merge_recent_writes(df: pd.DataFrame) -> pd.DataFrame:
+    """Add this session's recent writes on top of the sheet data.
+
+    Recent local rows carry a current timestamp and are appended last, so the
+    robust recency sort ranks them newest and they win, exactly when Google has
+    not yet surfaced them. Expired entries are pruned. If Google has already
+    caught up, the duplicate says the same thing, so the result is unchanged.
+    """
+    d = st.session_state.get("recent_status", {})
+    if not d:
+        return df
+    now = datetime.now(TZ)
+    rows = []
+    keep = {}
+    for name, w in d.items():
+        try:
+            age = (now - w["at"]).total_seconds()
+        except Exception:
+            age = 1e9
+        if age <= RECENT_WRITE_TTL_SECONDS:
+            keep[name] = w
+            rows.append({
+                "id": "local",
+                "timestamp": w["timestamp"],
+                "name": name,
+                "reason": w["reason"],
+                "other_reason": w["other_reason"],
+                "action": w["status"],
+                "status": w["status"],
+                "due_back": "",
+                "late": "",
+            })
+    st.session_state["recent_status"] = keep
+    if not rows:
+        return df
+    add = pd.DataFrame(rows)
+    if df is None or df.empty:
+        return add
+    # Work on copies. df here is the process-wide cached logs frame, so adding
+    # columns to it in place would poison the cache for every other reader.
+    base = df.copy()
+    for c in base.columns:
+        if c not in add.columns:
+            add[c] = ""
+    for c in add.columns:
+        if c not in base.columns:
+            base[c] = ""
+    return pd.concat([base, add[base.columns]], ignore_index=True)
+
+
 def get_latest_status_map(df: pd.DataFrame) -> dict:
     """Map each name to their most recent log row: status, reason, other_reason.
 
@@ -1561,7 +1666,7 @@ def get_status_fresh(name: str):
         clear_logs_cache()
     except Exception:
         pass
-    df = load_logs_df_cached()
+    df = merge_recent_writes(load_logs_df_cached())
     return get_latest_status_map(df).get((name or "").strip())
 
 
@@ -1578,7 +1683,7 @@ def get_status_map_fresh() -> dict:
         clear_logs_cache()
     except Exception:
         pass
-    return get_latest_status_map(load_logs_df_cached())
+    return get_latest_status_map(merge_recent_writes(load_logs_df_cached()))
 
 
 def append_log_rows_batch(rows: list) -> bool:
@@ -1596,6 +1701,8 @@ def append_log_rows_batch(rows: list) -> bool:
         matrix = [[rd.get(h, "") for h in headers] for rd in rows]
         sheet.append_rows(matrix)
         clear_logs_cache()
+        for rd in rows:
+            remember_status(rd.get("name", ""), rd.get("status", ""), rd.get("reason", ""), rd.get("other_reason", ""))
         return True
     except Exception:
         return False
@@ -2093,19 +2200,24 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     undo = get_pending_undo()
     if undo:
         left = int(UNDO_WINDOW_SECONDS - (datetime.now(TZ) - undo["at"]).total_seconds())
-        uc1, uc2 = st.columns([1, 3])
+        # The name goes ON the button. The kiosk is shared, so the next
+        # counselor in line will see this too, and "Undo" alone invites them to
+        # tap it. Naming the person makes it obvious whose action it is.
+        uc1, uc2 = st.columns([2, 3])
         with uc1:
-            if st.button("Undo", key="undo_btn", use_container_width=True):
+            if st.button(f"Undo {undo['desc']}", key="undo_btn", use_container_width=True):
                 if delete_log_row_by_id(undo["id"]):
                     notify_phone("Bauercrest: UNDO", f"Undo: {undo['desc']}")
                     st.session_state["log_flash"] = f"Undone: {undo['desc']}"
+                    st.session_state["log_flash_kind"] = "out"
+                    st.session_state["log_flash_word"] = "UNDONE"
                 else:
                     st.session_state["log_flash"] = "Nothing to undo. That record is already gone."
                 st.session_state.pop("undo_action", None)
                 st.session_state["signio_nonce"] += 1
                 st.rerun()
         with uc2:
-            st.caption(f"Undo {undo['desc']} — available for {max(left, 0)}s")
+            st.caption(f"Only if that was a mistake. {max(left, 0)}s left.")
 
     # One box does both, so spell out both directions in large type. A
     # counselor glancing at the screen sees what typing their code will do.
@@ -2126,10 +2238,16 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
 
     # Reason only matters when the code turns out to be a sign-out. It sits
     # above the box and is read only if the person is currently in.
-    reason = st.selectbox("Reason (only used if you are signing OUT)", REASONS, key="signout_reason")
+    # These carry the nonce too. The kiosk is ONE browser session shared by
+    # every counselor, so a fixed key means the previous person's reason is
+    # still selected when the next person walks up. That is how someone taking
+    # a Day Off gets signed out as Night Off, and how a typed "Other" reason
+    # gets attached to the wrong person. Resetting after every action makes
+    # each counselor start from a clean form.
+    reason = st.selectbox("Reason (only used if you are signing OUT)", REASONS, key=f"signout_reason_{n}")
     other_reason = ""
     if reason == "Other (type reason)":
-        other_reason = st.text_input("Type your reason", key="signout_other_reason")
+        other_reason = st.text_input("Type your reason", key=f"signout_other_reason_{n}")
 
     with st.form("signio_form", clear_on_submit=False):
         code = st.text_input("Your code", type="password", max_chars=6, key=f"signio_code_{n}")
@@ -2224,7 +2342,7 @@ def page_whos_out():
         # Flip to the red screen if an emergency is declared on another machine.
         escalate_if_emergency_changed("normal")
 
-        df_logs = load_logs_df_cached()
+        df_logs = merge_recent_writes(load_logs_df_cached())
         df_out = get_currently_out(df_logs)
 
         # Alert on anyone who just crossed their deadline. Runs on the board's
@@ -2322,8 +2440,18 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
     vans_df = load_vans_df_cached()
     status_map = compute_van_status(vans_df)
 
+    # A van picked by someone who then walked away must not still be selected
+    # when the next counselor arrives. The kiosk is one shared session, so the
+    # selection expires on its own.
     selected = st.session_state.get("van_selected", "")
-    # A van that got signed in or out elsewhere should not stay selected.
+    picked_at = st.session_state.get("van_selected_at")
+    if selected and picked_at is not None:
+        try:
+            if (datetime.now(TZ) - picked_at).total_seconds() > VAN_SELECT_TIMEOUT_SECONDS:
+                selected = ""
+                st.session_state["van_selected"] = ""
+        except Exception:
+            pass
     if selected and selected not in VANS:
         selected = ""
 
@@ -2337,6 +2465,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
         with cols[i]:
             if st.button(van_label(v), key=f"vanpick_{v}", use_container_width=True):
                 st.session_state["van_selected"] = v
+                st.session_state["van_selected_at"] = datetime.now(TZ)
                 st.rerun()
 
     if not selected:
@@ -2805,7 +2934,7 @@ def render_special_screen(screen: str, staff_names: list):
         # If the campwide state changed elsewhere, re-evaluate the whole app.
         escalate_if_emergency_changed("emergency" if is_emerg else "normal")
 
-        df_logs = load_logs_df_cached()
+        df_logs = merge_recent_writes(load_logs_df_cached())
         df_out = get_currently_out(df_logs)
         out_names = sorted(df_out["name"].tolist())
         out_set = set(out_names)
@@ -2954,22 +3083,25 @@ def main():
     elif page == "Admin / History":
         page_admin_history(staff_pins)
 
-    # Background heartbeat. Runs on EVERY page, including the sign-out kiosk.
+    # Background heartbeat.
     #
-    # Two jobs, both of which used to only happen if someone had the Who's Out
-    # board open:
-    #   1. Late alerts. The Big House kiosk sits on Sign In / Out all day, so
-    #      without this a Night Off deadline at 12:15 AM would pass unnoticed.
-    #   2. Emergency. A campwide emergency declared elsewhere now flips the
-    #      sign-out kiosk to the red screen too, not just the display boards.
+    # On the display pages it does two jobs: fire late alerts (so a Night Off
+    # deadline at 12:15 AM is caught even if only a board is open), and flip to
+    # the red emergency screen when one is declared elsewhere.
     #
-    # It draws nothing and holds no widgets, so it can never disturb someone
-    # typing their code.
+    # On the Sign In / Out page it does ONLY the fast emergency check. The
+    # late-alert work makes several Google Sheets calls, and Streamlit handles
+    # one action at a time, so running it here made a counselor's Enter press
+    # get dropped while the heartbeat was mid-call. That was the glitch. Keeping
+    # the heavy work off this page keeps the kiosk instant.
+    on_sign_page = (page == "Sign In / Out")
+
     @st.fragment(run_every=BOARD_REFRESH_SECONDS)
     def heartbeat():
         try:
             escalate_if_emergency_changed("normal")
-            check_late_and_alert(get_currently_out(load_logs_df_cached()))
+            if not on_sign_page:
+                check_late_and_alert(get_currently_out(merge_recent_writes(load_logs_df_cached())))
         except Exception:
             pass
 
