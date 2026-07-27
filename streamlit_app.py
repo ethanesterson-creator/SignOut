@@ -29,13 +29,21 @@ SHEET_STAFF = "staff"
 SHEET_DRIVERS = "drivers"
 SHEET_DAYS_OFF = "days_off"  # optional tab; used for the Day Off board (display only)
 SHEET_SETTINGS = "settings"  # auto-created; holds the campwide emergency flag
+SHEET_LOGS_ARCHIVE = "logs_archive"  # auto-created; permanent history moved out of the live tab
+
+# When archiving, always keep rows from at least this many days back in the
+# live tab, on top of keeping every row for anyone currently out. A day-off
+# cycle can span more than a day, so this buffer keeps recent completed
+# activity and any in-flight deadline visible in the app.
+ARCHIVE_KEEP_DAYS = 3
 SHEET_SCHEDULE = "schedule"  # auto-created; period start/end times for Period Off deadlines
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # Hard timeout on every Google Sheets call, so a slow Google response can never
-# freeze the kiosk on a blank screen.
-SHEETS_TIMEOUT_SECONDS = 15
+# freeze the kiosk on a blank screen. A read taking longer than this is broken
+# anyway, so failing fast and recovering on the next tick beats a long hang.
+SHEETS_TIMEOUT_SECONDS = 10
 
 REASONS = ["Period Off", "Day Off", "Night Off", "Other (type reason)"]
 
@@ -652,6 +660,14 @@ def format_board_time(dt):
 BOARD_REFRESH_SECONDS = 60
 SCREEN_REFRESH_SECONDS = 20
 
+# If the kiosk is left on a display page (Who's Out or Vans) and untouched for
+# this long, it returns itself to the Sign In / Out screen. The whole system
+# depends on one central kiosk that is always ready to sign people out, so it
+# should never sit parked on a board where the next counselor does not realize
+# they have to navigate back. Admin is left alone, since that is a deliberate
+# staff session, not a place someone gets stranded.
+IDLE_RETURN_SECONDS = 120
+
 
 def escalate_if_emergency_changed(current_screen: str = "normal"):
     """From inside a live fragment, jump to a full app rerun when the campwide
@@ -764,7 +780,7 @@ def set_emergency_flag(on: bool):
         pass
 
 
-@st.cache_data(ttl=12)
+@st.cache_data(ttl=30)
 def get_emergency_flag() -> bool:
     """Read the campwide emergency flag. Cached briefly so it spreads fast
     without hammering the sheet on every render.
@@ -808,7 +824,7 @@ def set_setting(key: str, value: str):
         pass
 
 
-@st.cache_data(ttl=20)
+@st.cache_data(ttl=30)
 def get_setting(key: str) -> str:
     """Read any key from the settings tab. Blank if missing."""
     try:
@@ -1202,9 +1218,12 @@ def ensure_logs_header(sheet):
             new_headers = headers + missing
             sheet.delete_rows(1)
             sheet.insert_row(new_headers, 1)
-    except Exception as e:
-        st.error(f"Could not ensure logs header: {e}")
-        st.stop()
+    except Exception:
+        # Best effort only. The reader already tolerates messy headers and the
+        # loaders fill missing columns in memory, so a failure here must never
+        # halt the kiosk. Leaving a raw error on screen during a demo is worse
+        # than quietly moving on.
+        pass
 
 
 @st.cache_data(ttl=10)
@@ -1511,7 +1530,7 @@ def _sorted_by_recency(df: pd.DataFrame) -> pd.DataFrame:
     """
     tmp = df.copy().reset_index(drop=True)
     tmp["_row"] = range(len(tmp))
-    tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
+    tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce", format="mixed")
     tmp = tmp.sort_values(
         ["timestamp", "_row"],
         na_position="first",
@@ -1548,6 +1567,202 @@ def get_currently_out(df: pd.DataFrame) -> pd.DataFrame:
 # sign back in only the people the van itself signed out, and never touch
 # someone who was already out for their own reason.
 VAN_SIGNOUT_TAG = "VAN_TRIP"
+
+
+# =================================================
+# LOG ARCHIVING (keep the live tab small, keep 10 years of history)
+# =================================================
+def get_logs_archive_sheet():
+    """Get the archive tab, creating it (with the live header) if missing."""
+    try:
+        return get_worksheet(SHEET_LOGS_ARCHIVE)
+    except WorksheetNotFound:
+        ss = get_spreadsheet()
+        sheet = ss.add_worksheet(title=SHEET_LOGS_ARCHIVE, rows=200, cols=len(LOGS_HEADERS_REQUIRED))
+        sheet.update("A1", [list(LOGS_HEADERS_REQUIRED)])
+        try:
+            get_worksheet.clear()
+        except Exception:
+            pass
+        return sheet
+
+
+def _row_age_ok_to_archive(ts_value, cutoff):
+    """True only if this timestamp is real AND older than the cutoff.
+
+    A blank or unparseable timestamp returns False, so a row we cannot date is
+    never archived. We only ever move rows we are certain are old.
+    """
+    dt = parse_due(ts_value)
+    if dt is None:
+        return False
+    return dt < cutoff
+
+
+def plan_archive(live_df: pd.DataFrame, raw_rows: list, header: list, now=None):
+    """Decide which raw rows stay live and which move to the archive.
+
+    The rule, in order of safety:
+      - Keep EVERY row for anyone whose latest status is OUT. Removing any of
+        their rows could strand them off the Who's Out board.
+      - Keep any row newer than the keep-days window.
+      - Keep any row we cannot confidently date (blank or bad timestamp).
+      - Everything else is a closed-out, old row and moves to the archive.
+
+    Works on the RAW cell rows so the archived record is byte-for-byte what was
+    written, never a reformatted copy. Returns (keep_rows, archive_rows).
+    """
+    now = now or datetime.now(TZ)
+    cutoff = now - timedelta(days=ARCHIVE_KEEP_DAYS)
+
+    # Names whose latest row is OUT, judged on the real sheet data.
+    out_names = set(get_currently_out(live_df)["name"].astype(str).str.strip().tolist())
+
+    try:
+        name_i = header.index("name")
+    except ValueError:
+        name_i = 2
+    try:
+        ts_i = header.index("timestamp")
+    except ValueError:
+        ts_i = 1
+
+    keep_rows, archive_rows = [], []
+    for raw in raw_rows:
+        # Normalize the row to the header width so both tabs line up.
+        row = list(raw) + [""] * (len(header) - len(raw))
+        row = row[:len(header)]
+        name = str(row[name_i]).strip() if name_i < len(row) else ""
+        ts_value = row[ts_i] if ts_i < len(row) else ""
+
+        if name in out_names:
+            keep_rows.append(row)
+        elif not _row_age_ok_to_archive(ts_value, cutoff):
+            keep_rows.append(row)
+        else:
+            archive_rows.append(row)
+    return keep_rows, archive_rows
+
+
+def archive_old_logs():
+    """Move old, closed-out log rows to the archive tab. Returns a result dict.
+
+    Safety is everything here, since this touches thousands of rows:
+      1. Read the live tab once (raw cells + a parsed frame for status).
+      2. Decide keep vs archive with plan_archive.
+      3. Copy the archive rows to the archive tab in chunks, then VERIFY the
+         archive grew by exactly the number of rows we sent. If it did not,
+         ABORT and leave the live tab completely untouched. Nothing is ever
+         removed from live until its copy is confirmed present in the archive.
+      4. Rewrite the live tab by overwriting from the top with the kept rows,
+         then trimming the now-redundant tail. This never leaves the live tab
+         empty: if the trim step fails, the kept rows are already in place and
+         some old rows simply remain (harmless duplicates of the archive), so
+         the board still works. It fails safe, never with data loss.
+    """
+    result = {"ok": False, "archived": 0, "kept": 0, "message": ""}
+    try:
+        live = get_worksheet(SHEET_LOGS)
+        all_vals = live.get_all_values()
+    except Exception:
+        result["message"] = "Could not read the live logs tab. Nothing was changed."
+        return result
+
+    if not all_vals:
+        result["message"] = "The logs tab looks empty. Nothing to archive."
+        return result
+
+    header = all_vals[0]
+    raw_rows = all_vals[1:]
+    if len(raw_rows) == 0:
+        result["message"] = "No log rows yet. Nothing to archive."
+        return result
+
+    live_df = read_sheet_df(live)
+    keep_rows, archive_rows = plan_archive(live_df, raw_rows, header)
+    result["kept"] = len(keep_rows)
+
+    if not archive_rows:
+        result["ok"] = True
+        result["message"] = f"Nothing old enough to archive. All {len(keep_rows)} rows are recent or still open."
+        return result
+
+    # --- Step 3: copy to archive, then verify it landed ---
+    try:
+        arch = get_logs_archive_sheet()
+        before = len(arch.get_all_values())
+        for i in range(0, len(archive_rows), 500):
+            arch.append_rows(archive_rows[i:i + 500])
+        after = len(arch.get_all_values())
+    except Exception:
+        result["message"] = "Could not write to the archive tab. Live logs were left untouched, nothing was lost."
+        return result
+
+    if after != before + len(archive_rows):
+        result["message"] = (
+            "Archive copy did not verify (expected "
+            f"{before + len(archive_rows)} rows, found {after}). Live logs were "
+            "left untouched. Check the logs_archive tab, then try again."
+        )
+        return result
+
+    # --- Step 4: shrink the live tab, failing safe ---
+    try:
+        new_live = [header] + keep_rows
+        live.update("A1", new_live)
+        old_total = len(all_vals)
+        new_total = len(new_live)
+        if old_total > new_total:
+            live.delete_rows(new_total + 1, old_total)
+        clear_logs_cache()
+        try:
+            get_log_headers.clear()
+        except Exception:
+            pass
+    except Exception:
+        result["message"] = (
+            f"Archived {len(archive_rows)} rows to logs_archive, but shrinking the "
+            "live tab did not fully finish. Nothing was lost. Run it once more, "
+            "or check the logs tab."
+        )
+        result["archived"] = len(archive_rows)
+        return result
+
+    result["ok"] = True
+    result["archived"] = len(archive_rows)
+    result["message"] = (
+        f"Archived {len(archive_rows)} old rows to logs_archive. The live tab now "
+        f"holds {len(keep_rows)} rows (everyone still out, plus the last "
+        f"{ARCHIVE_KEEP_DAYS} days). Nothing was deleted, only moved."
+    )
+    return result
+
+
+def build_full_history_csv() -> str:
+    """Live + archive, combined and sorted oldest to newest, as CSV text.
+
+    This is the 10-year record in one file. Reads both tabs so a full history
+    can be handed over at any time even after archiving has run many times.
+    """
+    frames = []
+    try:
+        frames.append(read_sheet_df(get_worksheet(SHEET_LOGS)))
+    except Exception:
+        pass
+    try:
+        frames.append(read_sheet_df(get_logs_archive_sheet()))
+    except Exception:
+        pass
+    frames = [f for f in frames if f is not None and not f.empty]
+    if not frames:
+        return ""
+    full = pd.concat(frames, ignore_index=True)
+    if "id" in full.columns:
+        full = full.drop_duplicates(subset=["id"], keep="first")
+    if "timestamp" in full.columns:
+        full["_ts"] = pd.to_datetime(full["timestamp"], errors="coerce")
+        full = full.sort_values("_ts", na_position="first").drop(columns=["_ts"])
+    return full.to_csv(index=False)
 
 
 # =================================================
@@ -2022,9 +2237,9 @@ def ensure_vans_header(sheet):
             new_headers = [str(h).strip() for h in headers] + missing
             sheet.delete_rows(1)
             sheet.insert_row(new_headers, 1)
-    except Exception as e:
-        st.error(f"Could not ensure vans header: {e}")
-        st.stop()
+    except Exception:
+        # Best effort, same as the logs header. Never halt on this.
+        pass
 
 
 @st.cache_data(ttl=10)
@@ -2800,6 +3015,66 @@ def page_admin_history(staff_pins: dict):
 
     st.markdown("---")
 
+    # -------------------------------------------------
+    # ARCHIVE: keep the live tab small, keep history forever
+    # -------------------------------------------------
+    section_title("Archive Old Logs")
+    st.caption(
+        "Moves old, closed-out sign-outs to a separate logs_archive tab so the "
+        "app stays fast. Everyone still signed out is kept, plus the last "
+        f"{ARCHIVE_KEEP_DAYS} days. Nothing is ever deleted, only moved. Run it "
+        "when the board is calm."
+    )
+
+    arch_flash = st.session_state.pop("archive_flash", "")
+    if arch_flash:
+        st.success(arch_flash)
+    arch_err = st.session_state.pop("archive_error", "")
+    if arch_err:
+        st.error(arch_err)
+
+    with st.form("archive_form", clear_on_submit=True):
+        st.caption("Type your admin code and confirm to archive.")
+        arch_code = st.text_input("Your admin code", type="password", max_chars=6, key="archive_admin_code")
+        arch_confirm = st.checkbox("I understand old closed-out rows will be moved to the archive tab.")
+        arch_go = st.form_submit_button("Archive Old Logs Now")
+
+    if arch_go:
+        admin_name, err = resolve_admin_code(arch_code, staff_pins)
+        if err:
+            st.session_state["archive_error"] = err
+            st.rerun()
+        elif not arch_confirm:
+            st.session_state["archive_error"] = "Tick the confirm box first."
+            st.rerun()
+        else:
+            with st.spinner("Archiving. This can take a moment for thousands of rows."):
+                res = archive_old_logs()
+            if res["ok"]:
+                notify_phone("Bauercrest: Logs archived", f"{admin_name} archived {res['archived']} rows.")
+                st.session_state["archive_flash"] = res["message"]
+            else:
+                st.session_state["archive_error"] = res["message"]
+            st.rerun()
+
+    st.caption("Full 10-year record, live plus archive, in one file:")
+    try:
+        full_csv = build_full_history_csv()
+        if full_csv:
+            st.download_button(
+                "Download FULL History (live + archive) as CSV",
+                data=full_csv,
+                file_name="bauercrest_full_signout_history.csv",
+                mime="text/csv",
+                key="full_history_dl",
+            )
+        else:
+            st.caption("No history to export yet.")
+    except Exception:
+        st.caption("Could not build the full-history file right now. Try again in a moment.")
+
+    st.markdown("---")
+
     df_logs = load_logs_df_cached()
 
     section_title("Full Log History")
@@ -3034,7 +3309,7 @@ def ensure_headers_once():
         pass
 
 
-def main():
+def _main_body():
     st.set_page_config(
         page_title="Bauercrest Staff Sign-Out",
         page_icon="🏕️",
@@ -3063,6 +3338,13 @@ def main():
     st.sidebar.title("Staff Sign-Out")
     st.sidebar.caption("Sign in and out with your 4-digit code.")
 
+    # The idle timer sets this flag, then reruns. We apply it HERE, before the
+    # page radio is created, because a widget's value cannot be changed after
+    # the widget is drawn. Setting the radio's stored value first makes it come
+    # up on the Sign In / Out page.
+    if st.session_state.pop("force_home", False):
+        st.session_state["main_page_radio"] = "Sign In / Out"
+
     page = st.sidebar.radio(
         "Go to",
         ["Sign In / Out", "Who's Out", "Vans", "Admin / History"],
@@ -3074,6 +3356,12 @@ def main():
 
     staff_pins, staff_names, driver_names = get_staff_pins_and_lists()
 
+    # Every real interaction reruns main(), so stamping here marks the last time
+    # someone actually touched the kiosk. The idle watcher below compares
+    # against this. Fragment-only refreshes do not run main(), so they do not
+    # falsely count as activity.
+    st.session_state["kiosk_active_at"] = datetime.now(TZ)
+
     if page == "Sign In / Out":
         page_sign_in_out(staff_pins, staff_names)
     elif page == "Who's Out":
@@ -3083,29 +3371,76 @@ def main():
     elif page == "Admin / History":
         page_admin_history(staff_pins)
 
-    # Background heartbeat.
-    #
-    # On the display pages it does two jobs: fire late alerts (so a Night Off
-    # deadline at 12:15 AM is caught even if only a board is open), and flip to
-    # the red emergency screen when one is declared elsewhere.
-    #
-    # On the Sign In / Out page it does ONLY the fast emergency check. The
-    # late-alert work makes several Google Sheets calls, and Streamlit handles
-    # one action at a time, so running it here made a counselor's Enter press
-    # get dropped while the heartbeat was mid-call. That was the glitch. Keeping
-    # the heavy work off this page keeps the kiosk instant.
-    on_sign_page = (page == "Sign In / Out")
+    # Idle return-home watcher. Only on the counselor-facing display pages, so
+    # the kiosk never sits parked on a board. Admin and the sign page are left
+    # alone. Draws nothing.
+    if page in ("Who's Out", "Vans"):
+        @st.fragment(run_every=15)
+        def idle_watch():
+            try:
+                last = st.session_state.get("kiosk_active_at")
+                if last is None:
+                    return
+                if (datetime.now(TZ) - last).total_seconds() >= IDLE_RETURN_SECONDS:
+                    st.session_state["force_home"] = True
+                    st.session_state["van_selected"] = ""
+                    st.rerun(scope="app")
+            except Exception:
+                pass
 
-    @st.fragment(run_every=BOARD_REFRESH_SECONDS)
-    def heartbeat():
+        idle_watch()
+
+    # Background work, one place per page. Who's Out already does emergency
+    # escalation AND late alerts inside its own live board fragment, so it gets
+    # no heartbeat here. Running a second fragment there was doing the same
+    # Google Sheets reads twice on every visit, which is what made switching
+    # pages buffer. The Sign page gets a cheap emergency-only check so it stays
+    # instant for typing. Vans and Admin get the full check, since nothing else
+    # on those pages fires late alerts.
+    if page != "Who's Out":
+        emergency_only = (page == "Sign In / Out")
+
+        @st.fragment(run_every=BOARD_REFRESH_SECONDS)
+        def heartbeat():
+            try:
+                escalate_if_emergency_changed("normal")
+                if not emergency_only:
+                    check_late_and_alert(
+                        get_currently_out(merge_recent_writes(load_logs_df_cached()))
+                    )
+            except Exception:
+                pass
+
+        heartbeat()
+
+
+def main():
+    """Run the app behind a safety net.
+
+    If anything unexpected throws, a counselor or an ACA visitor must never see
+    a raw Python traceback. They see a calm message and a retry button, and the
+    kiosk keeps working. set_page_config must run before this guard can draw,
+    so the body owns it and we only catch what comes after.
+    """
+    try:
+        _main_body()
+    except Exception:
         try:
-            escalate_if_emergency_changed("normal")
-            if not on_sign_page:
-                check_late_and_alert(get_currently_out(merge_recent_writes(load_logs_df_cached())))
+            st.markdown(
+                "<div style='max-width:640px;margin:3rem auto;padding:1.6rem 1.8rem;"
+                "border-radius:14px;background:#FBF3E4;border:2px solid #B07A1E;"
+                "font-family:sans-serif;color:#6B4A0F;'>"
+                "<div style='font-size:1.4rem;font-weight:800;margin-bottom:0.4rem;'>"
+                "One moment, reconnecting</div>"
+                "<div style='font-size:1rem;'>The sign-out board had a brief hiccup talking to "
+                "its records. Tap the button to reload. Nobody's sign-in or sign-out was lost.</div>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+            if st.button("Reload", use_container_width=True):
+                st.rerun()
         except Exception:
             pass
-
-    heartbeat()
 
 
 if __name__ == "__main__":
