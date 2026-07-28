@@ -315,6 +315,22 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
 }}
 .bc-vantile-who {{ font-size: 0.92rem; font-weight: 600; opacity: 0.9; }}
 .bc-vantile-action {{ font-size: 0.85rem; margin-top: 0.35rem; opacity: 0.8; }}
+.bc-gas {{
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.6rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid rgba(120,130,150,0.3);
+}}
+.bc-gas-word {{
+    font-family: 'Archivo', sans-serif;
+    font-weight: 800;
+    font-size: 0.95rem;
+    letter-spacing: 0.01em;
+}}
+.bc-gas-unknown {{ color: #8A93A3; font-weight: 600; }}
+.bc-vantile-out .bc-gas {{ border-top-color: rgba(255,255,255,0.25); }}
 .bc-vantile-in {{ border-color: #2E7D32; background: #E7F4EA; color: #1B5E20; }}
 .bc-vantile-out {{ background: var(--navy); border-color: var(--navy-deep); color: {WHITE}; }}
 .bc-vantile-sel {{ box-shadow: 0 0 0 4px rgba(19,41,75,0.25); }}
@@ -2266,7 +2282,7 @@ def compute_van_status(vans_df: pd.DataFrame) -> dict:
         return status_map
 
     tmp = vans_df.copy()
-    for col in ["timestamp", "van", "status", "driver", "purpose", "passengers", "other_purpose", "action"]:
+    for col in ["timestamp", "van", "status", "driver", "purpose", "passengers", "other_purpose", "action", "gas_left"]:
         if col not in tmp.columns:
             tmp[col] = ""
 
@@ -2283,12 +2299,19 @@ def compute_van_status(vans_df: pd.DataFrame) -> dict:
         st_val = str(last.get("status", "")).strip().upper()
         if st_val not in ("IN", "OUT"):
             st_val = "IN"
+        # Gas is only recorded on a sign-in, so read the most recent row that
+        # actually has a gas value, regardless of whether the van is out now.
+        gas = ""
+        gas_rows = rows[rows["gas_left"].astype(str).str.strip() != ""]
+        if not gas_rows.empty:
+            gas = str(gas_rows.iloc[-1].get("gas_left", "")).strip()
         status_map[v] = {
             "status": st_val,
             "driver": str(last.get("driver", "")).strip(),
             "purpose": str(last.get("purpose", "")).strip(),
             "other_purpose": str(last.get("other_purpose", "")).strip(),
             "passengers": str(last.get("passengers", "")).strip(),
+            "gas": gas,
         }
     return status_map
 
@@ -2459,10 +2482,15 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     # a Day Off gets signed out as Night Off, and how a typed "Other" reason
     # gets attached to the wrong person. Resetting after every action makes
     # each counselor start from a clean form.
-    reason = st.selectbox("Reason (only used if you are signing OUT)", REASONS, key=f"signout_reason_{n}")
+    # Fixed keys, on purpose. The reason stays on whatever the last person
+    # picked, so a group all signing out for a Night Off does not have to reset
+    # it every single time. Only the code box resets between people. Counselors
+    # glance at the reason before typing, which is the trade for the
+    # convenience.
+    reason = st.selectbox("Reason (only used if you are signing OUT)", REASONS, key="signout_reason")
     other_reason = ""
     if reason == "Other (type reason)":
-        other_reason = st.text_input("Type your reason", key=f"signout_other_reason_{n}")
+        other_reason = st.text_input("Type your reason", key="signout_other_reason")
 
     with st.form("signio_form", clear_on_submit=False):
         code = st.text_input("Your code", type="password", max_chars=6, key=f"signio_code_{n}")
@@ -2614,6 +2642,50 @@ def van_out_since(vans_df, van_name):
         return "", None
 
 
+GAS_LEVELS = {
+    "Full": (1.00, "#2E7D32"),
+    "3/4": (0.75, "#4C9A2A"),
+    "Half": (0.50, "#C7A008"),
+    "1/4": (0.25, "#D08114"),
+    "Low / Empty": (0.10, "#B3261E"),
+}
+
+
+def gas_tank_svg(level_word: str) -> str:
+    """A little gas-tank graphic filled to match the recorded level.
+
+    The fill height and color both track the word, so the reading is obvious at
+    a glance: green and full up top, red and near-empty at the bottom.
+    """
+    word = str(level_word or "").strip()
+    if word not in GAS_LEVELS:
+        # Unknown or never recorded.
+        return (
+            "<div class='bc-gas'>"
+            "<svg width='34' height='46' viewBox='0 0 34 46'>"
+            "<rect x='4' y='6' width='26' height='36' rx='4' fill='none' "
+            "stroke='#B9C0CC' stroke-width='2'/>"
+            "</svg>"
+            "<div class='bc-gas-word bc-gas-unknown'>No reading</div>"
+            "</div>"
+        )
+    frac, color = GAS_LEVELS[word]
+    inner_h = 32.0
+    fill_h = max(2.0, inner_h * frac)
+    fill_y = 8.0 + (inner_h - fill_h)
+    return (
+        "<div class='bc-gas'>"
+        "<svg width='34' height='46' viewBox='0 0 34 46'>"
+        f"<rect x='5' y='8' width='24' height='{inner_h}' rx='3' fill='#0f1b30' opacity='0.10'/>"
+        f"<rect x='5' y='{fill_y:.1f}' width='24' height='{fill_h:.1f}' rx='3' fill='{color}'/>"
+        "<rect x='4' y='6' width='26' height='36' rx='4' fill='none' stroke='#3A4A63' stroke-width='2'/>"
+        "<rect x='24' y='2' width='7' height='6' rx='1.5' fill='#3A4A63'/>"
+        "</svg>"
+        f"<div class='bc-gas-word' style='color:{color};'>{esc(word)}</div>"
+        "</div>"
+    )
+
+
 def render_van_tiles(status_map: dict, selected: str = ""):
     """The van picker. Each van is one tile showing its state.
 
@@ -2630,12 +2702,14 @@ def render_van_tiles(status_map: dict, selected: str = ""):
         state_word = "OUT" if out else "AT CAMP"
         action = "Tap to bring back" if out else "Tap to take out"
         who = f"<div class='bc-vantile-who'>{esc(info.get('driver',''))}</div>" if out and info.get("driver") else ""
+        gas = gas_tank_svg(info.get("gas", ""))
         tiles.append(
             f"<div class='bc-vantile {state_cls}{sel}'>"
             f"<div class='bc-vantile-state'>{state_word}</div>"
             f"<div class='bc-vantile-name'>{esc(van_label(v))}</div>"
             f"{who}"
             f"<div class='bc-vantile-action'>{action}</div>"
+            f"{gas}"
             f"</div>"
         )
     st.markdown(f"<div class='bc-vangrid'>{''.join(tiles)}</div>", unsafe_allow_html=True)
@@ -3058,20 +3132,28 @@ def page_admin_history(staff_pins: dict):
             st.rerun()
 
     st.caption("Full 10-year record, live plus archive, in one file:")
-    try:
-        full_csv = build_full_history_csv()
-        if full_csv:
-            st.download_button(
-                "Download FULL History (live + archive) as CSV",
-                data=full_csv,
-                file_name="bauercrest_full_signout_history.csv",
-                mime="text/csv",
-                key="full_history_dl",
-            )
-        else:
-            st.caption("No history to export yet.")
-    except Exception:
-        st.caption("Could not build the full-history file right now. Try again in a moment.")
+    # Built only on demand. This reads BOTH tabs, which can be thousands of
+    # rows, so doing it on every admin page load would make the page crawl.
+    # The button prepares it, then the download appears.
+    if st.button("Prepare full history file", key="prep_full_history"):
+        try:
+            with st.spinner("Gathering live and archived history..."):
+                st.session_state["full_history_csv"] = build_full_history_csv()
+        except Exception:
+            st.session_state["full_history_csv"] = ""
+            st.error("Could not build the full-history file right now. Try again in a moment.")
+
+    full_csv = st.session_state.get("full_history_csv", "")
+    if full_csv:
+        st.download_button(
+            "Download FULL History (live + archive) as CSV",
+            data=full_csv,
+            file_name="bauercrest_full_signout_history.csv",
+            mime="text/csv",
+            key="full_history_dl",
+        )
+    elif full_csv == "":
+        st.caption("Press the button above to build the download.")
 
     st.markdown("---")
 
@@ -3081,7 +3163,17 @@ def page_admin_history(staff_pins: dict):
     if df_logs.empty:
         st.info("No logs recorded yet.")
     else:
+        # Show only the most recent rows so this table stays fast no matter how
+        # large the live tab is. The complete record is always available through
+        # the full-history download and the archive tab.
+        HISTORY_TABLE_LIMIT = 200
+        total_rows = len(df_logs)
         df_display = df_logs.copy()
+        df_display["_ts"] = pd.to_datetime(df_display["timestamp"], errors="coerce", format="mixed")
+        df_display = df_display.sort_values("_ts", na_position="first").drop(columns=["_ts"])
+        if total_rows > HISTORY_TABLE_LIMIT:
+            df_display = df_display.tail(HISTORY_TABLE_LIMIT)
+            st.caption(f"Showing the most recent {HISTORY_TABLE_LIMIT} of {total_rows} live rows. Use the downloads for the full record.")
         df_display["timestamp_str"] = df_display["timestamp"].apply(format_time)
         df_display = df_display.rename(columns={
             "id": "ID",
