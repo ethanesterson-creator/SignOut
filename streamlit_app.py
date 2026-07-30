@@ -1116,7 +1116,7 @@ def check_late_and_alert(df_out: pd.DataFrame):
 # Nightly "who is still out" summary to your phone, so a forget gets caught the
 # same night instead of rotting into a giant late stamp days later. Fires once
 # per night at this hour (24-hour clock). Change this one number to move it.
-NIGHTLY_SUMMARY_HOUR = 23
+NIGHTLY_SUMMARY_HOUR = 24
 NIGHTLY_SUMMARY_KEY = "nightly_summary_date"
 
 
