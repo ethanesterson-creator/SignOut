@@ -371,6 +371,72 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     font-weight: 800;
 }}
 
+/* Stale sign-in fork: shown only when someone out for hours enters a code. */
+.bc-fork {{
+    background: #FBF3E4;
+    border: 3px solid #B07A1E;
+    border-radius: 14px;
+    padding: 1rem 1.2rem;
+    margin: 0.4rem 0 0.7rem 0;
+}}
+.bc-fork-head {{
+    font-family: 'Archivo', sans-serif;
+    font-size: 1.35rem;
+    font-weight: 800;
+    color: #6B4A0F;
+}}
+.bc-fork-sub {{
+    font-family: 'Public Sans', sans-serif;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #7C5A1C;
+    margin-top: 0.25rem;
+}}
+
+/* Who's-out strip, right under the sign box. */
+.bc-strip-title {{
+    font-family: 'Archivo', sans-serif;
+    font-weight: 800;
+    font-size: 0.95rem;
+    color: var(--navy);
+    margin: 1.1rem 0 0.4rem 0;
+    letter-spacing: 0.02em;
+}}
+.bc-strip-empty {{
+    font-family: 'Public Sans', sans-serif;
+    color: #5A6472;
+    font-size: 0.95rem;
+}}
+.bc-strip {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-bottom: 0.3rem;
+}}
+.bc-chip-strip {{
+    display: inline-block;
+    background: #EAF0F7;
+    border: 1px solid #C6D2E1;
+    color: #1B2A45;
+    border-radius: 999px;
+    padding: 0.28rem 0.7rem;
+    font-family: 'Public Sans', sans-serif;
+    font-size: 0.88rem;
+    font-weight: 600;
+}}
+.bc-chip-strip-forgot {{
+    background: #FBF3E4;
+    border-color: #B07A1E;
+    color: #6B4A0F;
+}}
+.bc-strip-forgot-label {{
+    font-family: 'Archivo', sans-serif;
+    font-weight: 800;
+    font-size: 0.8rem;
+    color: #7C5A1C;
+    margin: 0.35rem 0 0.3rem 0;
+}}
+
 .bc-grid {{
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
@@ -685,24 +751,6 @@ SCREEN_REFRESH_SECONDS = 20
 IDLE_RETURN_SECONDS = 120
 
 
-def escalate_if_emergency_changed(current_screen: str = "normal"):
-    """From inside a live fragment, jump to a full app rerun when the campwide
-    emergency flag no longer matches what this screen is showing.
-
-    Normal boards flip TO the red screen when an emergency is declared
-    elsewhere. The red screen flips back to normal when it is cleared
-    elsewhere. This is what makes the emergency truly campwide without a
-    jarring full-page reload on every tick.
-    """
-    flag = get_emergency_flag()
-    if current_screen == "emergency":
-        if not flag:
-            st.rerun(scope="app")
-    else:
-        if flag:
-            st.rerun(scope="app")
-
-
 def normalize_weekday(s: str) -> str:
     """Normalize weekday strings like 'Mon', 'monday', 'MONDAY' -> 'monday'."""
     s = (s or "").strip().lower()
@@ -772,51 +820,6 @@ def get_settings_sheet():
         except Exception:
             pass
         return sheet
-
-
-def set_emergency_flag(on: bool):
-    """Write the campwide emergency flag. Every kiosk reads this on refresh."""
-    try:
-        sheet = get_settings_sheet()
-        try:
-            cell = sheet.find("emergency", in_column=1)
-        except TypeError:
-            cell = sheet.find("emergency")
-            if cell and cell.col != 1:
-                cell = None
-        value = "TRUE" if on else "FALSE"
-        if cell and cell.col == 1:
-            sheet.update_cell(cell.row, 2, value)
-        else:
-            sheet.append_row(["emergency", value])
-        get_emergency_flag.clear()
-    except Exception:
-        # Never let a flag write crash the app. The triggering screen still
-        # shows locally; other screens pick it up once the write lands.
-        pass
-
-
-@st.cache_data(ttl=30)
-def get_emergency_flag() -> bool:
-    """Read the campwide emergency flag. Cached briefly so it spreads fast
-    without hammering the sheet on every render.
-
-    The triggering machine clears this cache the moment it writes the flag, so
-    it flips instantly there; other screens pick it up on their next tick.
-    Fails safe to False if the settings tab cannot be read, so a Sheets hiccup
-    never traps every kiosk on the red screen.
-    """
-    try:
-        sheet = get_settings_sheet()
-        df = read_sheet_df(sheet)
-        if df.empty or "key" not in df.columns or "value" not in df.columns:
-            return False
-        row = df[df["key"].astype(str).str.strip().str.lower() == "emergency"]
-        if row.empty:
-            return False
-        return str(row.iloc[0]["value"]).strip().upper() in ("TRUE", "1", "YES", "ON")
-    except Exception:
-        return False
 
 
 def set_setting(key: str, value: str):
@@ -1030,6 +1033,42 @@ LATE_ALERT_KEY = "late_alerted"
 # deleted. Change this one number to move the line.
 FORGOT_THRESHOLD_MINUTES = 180
 
+# For reasons that carry no deadline (Other, Van), lateness is always 0, so the
+# forgot logic above can never flag them. If someone is out on one of those for
+# this many hours, it is almost certainly a forgotten sign-in, so the sign
+# fork still steps in. Long enough that an all-day errand does not trip it.
+FORK_NO_DEADLINE_HOURS = 14
+
+
+def is_surprising_signin(info: dict, when=None) -> bool:
+    """True if signing this person IN would be surprising enough to ask first.
+
+    Surprising means their sign-out is stale enough that they probably forgot
+    to sign in and may be standing at the kiosk now to LEAVE again. Two ways to
+    qualify: far past their own deadline, or out for many hours on a reason that
+    has no deadline at all. Everyone whose state is fresh returns False and
+    flows through the fast toggle untouched.
+    """
+    if not info or info.get("status") != "OUT":
+        return False
+    when = when or datetime.now(TZ)
+    reason = str(info.get("reason", "")).strip()
+    ts = info.get("timestamp", "")
+
+    due = effective_due_back(reason, ts)
+    if due is not None:
+        return minutes_late(due, when) >= FORGOT_THRESHOLD_MINUTES
+
+    # No deadline for this reason: judge by raw time since sign-out.
+    out_dt = parse_due(ts)
+    if out_dt is None:
+        return False
+    try:
+        hours = (when - out_dt).total_seconds() / 3600.0
+    except Exception:
+        return False
+    return hours >= FORK_NO_DEADLINE_HOURS
+
 
 def check_late_and_alert(df_out: pd.DataFrame):
     """Push once for each person who has just gone past their deadline.
@@ -1070,6 +1109,53 @@ def check_late_and_alert(df_out: pd.DataFrame):
             # which would make those people get alerted over and over.
             merged = already_list + [r for r in new_alerts if r not in already]
             set_setting(LATE_ALERT_KEY, ",".join(merged[-300:]))
+    except Exception:
+        pass
+
+
+# Nightly "who is still out" summary to your phone, so a forget gets caught the
+# same night instead of rotting into a giant late stamp days later. Fires once
+# per night at this hour (24-hour clock). Change this one number to move it.
+NIGHTLY_SUMMARY_HOUR = 23
+NIGHTLY_SUMMARY_KEY = "nightly_summary_date"
+
+
+def check_nightly_summary(df_out: pd.DataFrame):
+    """Once per night at NIGHTLY_SUMMARY_HOUR, push who is still signed out.
+
+    Deduped on the calendar date in the settings tab, so it fires a single time
+    each night no matter how many board refreshes happen after the hour. Safe
+    to call from any board tick. Never breaks the board on failure.
+    """
+    try:
+        now = datetime.now(TZ)
+        if now.hour < NIGHTLY_SUMMARY_HOUR:
+            return
+
+        today = now.strftime("%Y-%m-%d")
+        try:
+            get_setting.clear()
+        except Exception:
+            pass
+        if get_setting(NIGHTLY_SUMMARY_KEY).strip() == today:
+            return  # already sent tonight
+
+        # Claim tonight FIRST, so two kiosks hitting the hour together do not
+        # both send. Whoever writes the date first wins; the other sees it.
+        set_setting(NIGHTLY_SUMMARY_KEY, today)
+
+        if df_out is None or df_out.empty:
+            notify_phone("Bauercrest: Nightly check", "All staff are signed IN. Nobody is out.")
+            return
+
+        people = []
+        for _, row in df_out.iterrows():
+            nm = str(row.get("name", "")).strip()
+            rs = str(row.get("reason", "")).strip()
+            people.append(f"{nm} ({rs})" if rs else nm)
+
+        body = f"{len(people)} still signed OUT: " + ", ".join(people)
+        notify_phone("Bauercrest: Still out tonight", body[:1500])
     except Exception:
         pass
 
@@ -1308,11 +1394,6 @@ def notify_vans(title: str, message: str):
     """
     topic = st.secrets.get("ntfy_topic_vans", "") or st.secrets.get("ntfy_topic", "")
     _ntfy_send(topic, title, message)
-
-
-def notify_emergency(title: str, message: str):
-    """High-priority push to the main phone for the emergency code."""
-    _ntfy_send(st.secrets.get("ntfy_topic", ""), title, message, priority="urgent", tags="rotating_light")
 
 
 def _ntfy_send(topic: str, title: str, message: str, priority: str = "", tags: str = ""):
@@ -2044,126 +2125,10 @@ def signin_everyone_on_van(van_name: str):
     return signed
 
 
-# =================================================
-# SPECIAL OPERATOR CODES (only you know these)
-# =================================================
-# Stored in Streamlit secrets so they never sit in the repo. Set any subset:
-#   code_field_trip_out, code_field_trip_in, code_emergency,
-#   code_headcount, code_clear
-FIELD_TRIP_TAG = "FIELD_TRIP"
-
 # Marker written into a log row when an admin signs someone in from the Admin
 # page. Lets the history show a human corrected the board.
 ADMIN_SIGNIN_TAG = "ADMIN_SIGNIN"
 
-
-def get_special_code(name: str) -> str:
-    """Read one special code from secrets. Blank if unset."""
-    return str(st.secrets.get(name, "")).strip()
-
-
-def match_special_code(code: str):
-    """Return which special action a typed code triggers, or None.
-
-    Only non-blank configured codes can match, so an empty box never fires
-    anything. Codes are compared as typed (not zero-padded like staff PINs),
-    so make them 5-6 digits to stay clear of 4-digit staff codes.
-    """
-    code = str(code or "").strip()
-    if not code:
-        return None
-    table = {
-        "field_trip_out": get_special_code("code_field_trip_out"),
-        "field_trip_in": get_special_code("code_field_trip_in"),
-        "emergency": get_special_code("code_emergency"),
-        "headcount": get_special_code("code_headcount"),
-        "clear": get_special_code("code_clear"),
-    }
-    for action, secret in table.items():
-        if secret and code == secret:
-            return action
-    return None
-
-
-def field_trip_signout_all(staff_names: list) -> int:
-    """Sign out every active staff member who is currently IN. Reason: Field Trip.
-
-    Anyone already out (a Period Off, a van) is skipped, so no doubles and no
-    overwriting a real reason. Tagged so the return code signs back in exactly
-    these people. One batched write. Returns how many were signed out.
-    """
-    status_map = get_status_map_fresh()
-    rows = []
-    stamp = datetime.now(TZ).isoformat(timespec="seconds")
-    for name in staff_names:
-        name = (name or "").strip()
-        if not name:
-            continue
-        info = status_map.get(name)
-        if info and info["status"] == "OUT":
-            continue
-        rows.append({
-            "id": str(uuid.uuid4())[:8],
-            "timestamp": stamp,
-            "name": name,
-            "reason": "Field Trip",
-            "other_reason": FIELD_TRIP_TAG,
-            "action": "OUT",
-            "status": "OUT",
-        })
-    append_log_rows_batch(rows)
-    return len(rows)
-
-
-def field_trip_signin_all() -> int:
-    """Sign back in only the people the field trip signed out.
-
-    Anyone who signed themselves in already, or who is out for another reason,
-    is left alone. One batched write. Returns how many were signed in.
-    """
-    status_map = get_status_map_fresh()
-    rows = []
-    stamp = datetime.now(TZ).isoformat(timespec="seconds")
-    for name, info in status_map.items():
-        name = (name or "").strip()
-        if not name:
-            continue
-        is_trip_out = (
-            info["status"] == "OUT"
-            and info["reason"] == "Field Trip"
-            and info["other_reason"].startswith(FIELD_TRIP_TAG)
-        )
-        if is_trip_out:
-            rows.append({
-                "id": str(uuid.uuid4())[:8],
-                "timestamp": stamp,
-                "name": name,
-                "reason": "Field Trip",
-                "other_reason": info["other_reason"],
-                "action": "IN",
-                "status": "IN",
-            })
-    append_log_rows_batch(rows)
-    return len(rows)
-
-
-def handle_special_code(action: str, staff_names: list) -> bool:
-    """Run a special action. Returns True if it set a flash and needs a rerun.
-
-    Screen actions (emergency, headcount, clear) are handled by the caller via
-    query params; this handles the data actions and alerts.
-    """
-    if action == "field_trip_out":
-        count = field_trip_signout_all(staff_names)
-        notify_phone("Bauercrest: FIELD TRIP", f"All staff signed out for a field trip ({count}).")
-        st.session_state["log_flash"] = f"Field trip: {count} staff signed out of camp."
-        return True
-    if action == "field_trip_in":
-        count = field_trip_signin_all()
-        notify_phone("Bauercrest: Field trip back", f"Field trip returned, {count} signed back in.")
-        st.session_state["log_flash"] = f"Field trip: {count} staff signed back in."
-        return True
-    return False
 
 # =================================================
 # DAYS OFF (DISPLAY ONLY)
@@ -2413,6 +2378,139 @@ def render_van_cards(status_map: dict):
 # =================================================
 # PAGES
 # =================================================
+def render_stale_fork(reason: str, other_reason: str):
+    """Show the In-or-Out question for someone who has been out a long time.
+
+    Only appears when the toggle set a pending_fork, i.e. a code was entered for
+    a person whose sign-out is hours stale. The app refuses to guess and lets
+    the counselor say what is actually happening. Two clear buttons, no toggle.
+    """
+    fork = st.session_state.get("pending_fork")
+    if not fork:
+        return
+
+    name = fork["name"]
+    since = ""
+    ts = fork.get("timestamp", "")
+    dt = parse_due(ts)
+    if dt is not None:
+        since = format_board_time(dt)
+    since_txt = f" since {since}" if since else " from earlier"
+
+    st.markdown(
+        "<div class='bc-fork'>"
+        f"<div class='bc-fork-head'>{esc(name)} has been signed OUT{esc(since_txt)}.</div>"
+        "<div class='bc-fork-sub'>The board still shows you out. What are you doing right now?</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    c1, c2, c3 = st.columns([2, 2, 1])
+
+    with c1:
+        if st.button("Coming IN (I'm back)", key="fork_in", use_container_width=True):
+            # Close the stale sign-out normally, stamping how late it ran.
+            due = effective_due_back(fork.get("reason", ""), fork.get("timestamp", ""))
+            mins = minutes_late(due)
+            late_note = f"LATE {mins} min" if mins > 0 else ""
+            new_id = append_log_row(
+                name,
+                fork.get("reason", ""),
+                fork.get("other_reason", ""),
+                action="IN",
+                status="IN",
+                late=late_note,
+            )
+            set_pending_undo(new_id, f"{name}'s sign-in")
+            st.session_state.pop("pending_fork", None)
+            st.session_state["log_flash_kind"] = "in"
+            st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED IN"
+            st.session_state["log_flash"] = "Welcome back. Your earlier sign-out is now closed."
+            st.session_state["signio_nonce"] += 1
+            st.rerun()
+
+    with c2:
+        if st.button("Signing OUT (leaving now)", key="fork_out", use_container_width=True):
+            if reason == "Other (type reason)" and not other_reason.strip():
+                st.session_state["fork_error"] = "Pick a reason above first, then tap Signing OUT."
+                st.rerun()
+            # Close the forgotten sign-out quietly, then open a fresh one now, so
+            # the record is honest and they are not left marked in camp.
+            append_log_row(
+                name,
+                fork.get("reason", ""),
+                fork.get("other_reason", ""),
+                action="IN",
+                status="IN",
+                late="AUTO-CLOSED (forgot to sign in)",
+                notify=False,
+            )
+            due = compute_due_back(reason, datetime.now(TZ))
+            new_id = append_log_row(name, reason, other_reason, action="OUT", status="OUT", due_back=due)
+            set_pending_undo(new_id, f"{name}'s sign-out")
+            st.session_state.pop("pending_fork", None)
+            st.session_state["log_flash_kind"] = "out"
+            st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED OUT"
+            shown = reason if reason != "Other (type reason)" else other_reason
+            st.session_state["log_flash"] = f"Got it. Signed you OUT now for {shown}. Your forgotten sign-in was cleaned up."
+            st.session_state["signio_nonce"] += 1
+            st.rerun()
+
+    with c3:
+        if st.button("Cancel", key="fork_cancel", use_container_width=True):
+            st.session_state.pop("pending_fork", None)
+            st.rerun()
+
+    ferr = st.session_state.pop("fork_error", "")
+    if ferr:
+        st.error(ferr)
+
+
+def whos_out_strip():
+    """A compact live list of who is out, right under the sign box.
+
+    Reuses the same cached logs read the board uses, with the session's own
+    recent writes merged in, so it never adds a blocking call and never slows
+    the code box. Forgot-zone people are shown separately, like the board.
+    """
+    try:
+        df_out = get_currently_out(merge_recent_writes(load_logs_df_cached()))
+    except Exception:
+        return
+
+    st.markdown("<div class='bc-strip-title'>Signed out right now</div>", unsafe_allow_html=True)
+    if df_out is None or df_out.empty:
+        st.markdown("<div class='bc-strip-empty'>Everyone is in camp.</div>", unsafe_allow_html=True)
+        return
+
+    forgot, active = [], []
+    for _, r in df_out.iterrows():
+        item = {
+            "name": str(r.get("name", "")).strip(),
+            "reason": str(r.get("reason", "")).strip(),
+            "other": clean_other_reason(r.get("other_reason", "")),
+        }
+        if row_minutes_late(r) >= FORGOT_THRESHOLD_MINUTES:
+            forgot.append(item)
+        else:
+            active.append(item)
+
+    def chip(it, forgot_zone=False):
+        label = esc(it["name"])
+        detail = esc(it["other"]) if it["other"] else esc(it["reason"])
+        cls = "bc-chip-strip bc-chip-strip-forgot" if forgot_zone else "bc-chip-strip"
+        tail = " · NO SIGN-IN" if forgot_zone else (f" · {detail}" if detail else "")
+        return f"<span class='{cls}'>{label}{esc(tail)}</span>"
+
+    if active:
+        st.markdown("<div class='bc-strip'>" + "".join(chip(i) for i in active) + "</div>", unsafe_allow_html=True)
+    if forgot:
+        st.markdown(
+            "<div class='bc-strip-forgot-label'>Probably forgot to sign in</div>"
+            "<div class='bc-strip'>" + "".join(chip(i, True) for i in forgot) + "</div>",
+            unsafe_allow_html=True,
+        )
+
+
 def page_sign_in_out(staff_pins: dict, staff_names: list):
     page_title("Camp Bauercrest Staff", "Sign In / Out")
 
@@ -2497,82 +2595,73 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
         submitted = st.form_submit_button("Enter", use_container_width=True)
 
     if submitted:
-        special = match_special_code(code)
-        if special:
-            # Operator codes take over before any normal sign logic.
-            st.session_state["signio_nonce"] += 1
-            if special == "emergency":
-                set_emergency_flag(True)
-                notify_emergency("BAUERCREST EMERGENCY", "Emergency declared. All screens showing head count.")
-                st.rerun()
-            elif special == "headcount":
-                st.query_params["screen"] = "headcount"
-                st.rerun()
-            elif special == "clear":
-                set_emergency_flag(False)
-                if "screen" in st.query_params:
-                    del st.query_params["screen"]
-                st.rerun()
-            else:
-                handle_special_code(special, staff_names)
-                st.rerun()
+        name, err = resolve_code(code, pin_lookup)
+        if err:
+            st.error(err)
         else:
-            name, err = resolve_code(code, pin_lookup)
-            if err:
-                st.error(err)
-            else:
-                # Decide direction from a FRESH read, never the cache. This is
-                # a toggle, so a stale read would not just show old data, it
-                # would flip the wrong way and sign someone OUT twice.
-                info = get_status_fresh(name)
-                is_out = bool(info and info["status"] == "OUT")
+            # Decide direction from a FRESH read, never the cache. This is
+            # a toggle, so a stale read would not just show old data, it
+            # would flip the wrong way and sign someone OUT twice.
+            info = get_status_fresh(name)
+            is_out = bool(info and info["status"] == "OUT")
 
-                if is_out:
-                    # Currently out -> sign them back in, carrying their reason.
-                    # Lateness is recomputed from the reason and the original
-                    # sign-out time, so a corrected reason gives a correct note.
-                    due = effective_due_back(info.get("reason", ""), info.get("timestamp", ""))
-                    mins = minutes_late(due)
-                    late_note = f"LATE {mins} min" if mins > 0 else ""
-                    new_id = append_log_row(
-                        name,
-                        info.get("reason", ""),
-                        info.get("other_reason", ""),
-                        action="IN",
-                        status="IN",
-                        late=late_note,
+            if is_out:
+                due = effective_due_back(info.get("reason", ""), info.get("timestamp", ""))
+                mins = minutes_late(due)
+
+                # THE FORK. If signing them in would be surprising (stale
+                # sign-out, likely a forgotten sign-in), do not guess. Stop and
+                # ask whether they are coming in or leaving again now. Everyone
+                # whose state is fresh skips this entirely.
+                if is_surprising_signin(info):
+                    st.session_state["pending_fork"] = {
+                        "name": name,
+                        "reason": info.get("reason", ""),
+                        "other_reason": info.get("other_reason", ""),
+                        "timestamp": info.get("timestamp", ""),
+                        "mins": mins,
+                    }
+                    st.session_state["signio_nonce"] += 1
+                    st.rerun()
+
+                # Normal, recent sign-in: carry their reason, note lateness.
+                late_note = f"LATE {mins} min" if mins > 0 else ""
+                new_id = append_log_row(
+                    name,
+                    info.get("reason", ""),
+                    info.get("other_reason", ""),
+                    action="IN",
+                    status="IN",
+                    late=late_note,
+                )
+                set_pending_undo(new_id, f"{name}'s sign-in")
+                st.session_state["log_flash_kind"] = "in"
+                st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED IN"
+                if mins > 0:
+                    notify_phone(
+                        "Bauercrest: Signed IN (LATE)",
+                        f"{name} signed in {mins} min late ({info.get('reason','')})",
                     )
-                    set_pending_undo(new_id, f"{name}'s sign-in")
-                    st.session_state["log_flash_kind"] = "in"
-                    st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED IN"
-
-                    # If they were out far past their deadline they almost
-                    # certainly forgot to sign in, and may have walked up now
-                    # meaning to sign OUT. Say so, loudly.
-                    if mins >= FORGOT_THRESHOLD_MINUTES:
-                        st.session_state["log_flash"] = "You were still signed out from earlier, so this signed you back IN."
-                        st.session_state["log_flash_ask"] = "Trying to sign OUT? Type your code again."
-                    elif mins > 0:
-                        notify_phone(
-                            "Bauercrest: Signed IN (LATE)",
-                            f"{name} signed in {mins} min late ({info.get('reason','')})",
-                        )
-                        st.session_state["log_flash"] = f"Welcome back. You were {mins} min late."
-                    else:
-                        st.session_state["log_flash"] = "Welcome back to camp."
-                    st.session_state["signio_nonce"] += 1
-                    st.rerun()
-                elif reason == "Other (type reason)" and not other_reason.strip():
-                    st.error("Please type a reason for 'Other'.")
+                    st.session_state["log_flash"] = f"Welcome back. You were {mins} min late."
                 else:
-                    due = compute_due_back(reason, datetime.now(TZ))
-                    new_id = append_log_row(name, reason, other_reason, action="OUT", status="OUT", due_back=due)
-                    set_pending_undo(new_id, f"{name}'s sign-out")
-                    st.session_state["log_flash_kind"] = "out"
-                    st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED OUT"
-                    st.session_state["log_flash"] = f"Reason: {reason if reason != 'Other (type reason)' else other_reason}. Sign back in when you return."
-                    st.session_state["signio_nonce"] += 1
-                    st.rerun()
+                    st.session_state["log_flash"] = "Welcome back to camp."
+                st.session_state["signio_nonce"] += 1
+                st.rerun()
+            elif reason == "Other (type reason)" and not other_reason.strip():
+                st.error("Please type a reason for 'Other'.")
+            else:
+                due = compute_due_back(reason, datetime.now(TZ))
+                new_id = append_log_row(name, reason, other_reason, action="OUT", status="OUT", due_back=due)
+                set_pending_undo(new_id, f"{name}'s sign-out")
+                st.session_state["log_flash_kind"] = "out"
+                st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED OUT"
+                st.session_state["log_flash"] = f"Reason: {reason if reason != 'Other (type reason)' else other_reason}. Sign back in when you return."
+                st.session_state["signio_nonce"] += 1
+                st.rerun()
+
+    render_stale_fork(reason, other_reason)
+
+    whos_out_strip()
 
     crest_footer()
 
@@ -2582,15 +2671,13 @@ def page_whos_out():
 
     @st.fragment(run_every=BOARD_REFRESH_SECONDS)
     def live_board():
-        # Flip to the red screen if an emergency is declared on another machine.
-        escalate_if_emergency_changed("normal")
-
         df_logs = merge_recent_writes(load_logs_df_cached())
         df_out = get_currently_out(df_logs)
 
         # Alert on anyone who just crossed their deadline. Runs on the board's
         # one-minute tick, deduped in the sheet so it fires only once.
         check_late_and_alert(df_out)
+        check_nightly_summary(df_out)
 
         # Split the board. Someone hours past their deadline almost certainly
         # forgot to sign in, and a huge minute count buries the person who is
@@ -3276,107 +3363,6 @@ def page_admin_history(staff_pins: dict):
 # =================================================
 # MAIN
 # =================================================
-def get_screen_mode() -> str:
-    """Read the special screen from the URL, set by an operator code."""
-    try:
-        v = st.query_params.get("screen", "")
-    except Exception:
-        v = ""
-    if isinstance(v, (list, tuple)):
-        v = v[0] if v else ""
-    return str(v).strip().lower()
-
-
-def render_special_screen(screen: str, staff_names: list):
-    """Full-screen head count. Red for emergency, calm navy for head count.
-
-    The count refreshes quietly in a fragment, no full-page reload. Stays up
-    until the clear code is typed. An emergency cleared on another machine
-    drops this screen back to normal within a tick.
-    """
-    is_emerg = (screen == "emergency")
-
-    @st.fragment(run_every=SCREEN_REFRESH_SECONDS)
-    def live_count():
-        # If the campwide state changed elsewhere, re-evaluate the whole app.
-        escalate_if_emergency_changed("emergency" if is_emerg else "normal")
-
-        df_logs = merge_recent_writes(load_logs_df_cached())
-        df_out = get_currently_out(df_logs)
-        out_names = sorted(df_out["name"].tolist())
-        out_set = set(out_names)
-        in_names = sorted([s for s in staff_names if s not in out_set])
-
-        reason_by_name = {}
-        for _, r in df_out.iterrows():
-            re = str(r.get("reason", "")).strip()
-            det = clean_other_reason(r.get("other_reason", ""))
-            reason_by_name[str(r.get("name", "")).strip()] = f"{re}{(' - ' + det) if det else ''}"
-
-        bg = "#7A1620" if is_emerg else "#13294B"
-        accent = "#FFFFFF"
-        eyebrow = "EMERGENCY HEAD COUNT" if is_emerg else "HEAD COUNT"
-        title = "ACCOUNT FOR EVERYONE" if is_emerg else "Who Is In and Out"
-
-        in_items = "".join(f"<li>{esc(s)}</li>" for s in in_names) or "<li class='none'>None</li>"
-        out_items = "".join(
-            f"<li>{esc(s)} <span class='hc-reason'>{esc(reason_by_name.get(s, ''))}</span></li>"
-            for s in out_names
-        ) or "<li class='none'>None</li>"
-
-        st.markdown(
-            f"""
-            <style>
-            .hc-wrap {{ background:{bg}; color:{accent}; border-radius:16px; padding:1.6rem 1.8rem; }}
-            .hc-eyebrow {{ font-family:'Archivo',sans-serif; font-weight:800; letter-spacing:0.16em;
-                text-transform:uppercase; font-size:0.8rem; opacity:0.85; }}
-            .hc-title {{ font-family:'Archivo',sans-serif; font-weight:800; font-size:2.2rem; margin:0.1rem 0 1rem 0; }}
-            .hc-counts {{ display:flex; gap:1rem; margin-bottom:1.2rem; }}
-            .hc-count {{ background:rgba(255,255,255,0.12); border-radius:12px; padding:0.8rem 1.4rem; flex:1; }}
-            .hc-count .num {{ font-family:'Archivo',sans-serif; font-weight:800; font-size:2.6rem; line-height:1; }}
-            .hc-count .lbl {{ font-weight:700; letter-spacing:0.08em; text-transform:uppercase; font-size:0.8rem; opacity:0.85; }}
-            .hc-cols {{ display:grid; grid-template-columns:1fr 1fr; gap:1.2rem; }}
-            .hc-col h3 {{ font-family:'Archivo',sans-serif; font-weight:800; font-size:1.1rem;
-                border-bottom:2px solid rgba(255,255,255,0.4); padding-bottom:0.3rem; color:{accent}; }}
-            .hc-col ul {{ list-style:none; padding:0; margin:0.4rem 0 0 0; columns:2; }}
-            .hc-col li {{ font-size:1.02rem; font-weight:600; padding:0.15rem 0; break-inside:avoid; }}
-            .hc-col li.none {{ opacity:0.6; font-weight:500; }}
-            .hc-reason {{ font-weight:500; opacity:0.8; font-size:0.85rem; }}
-            </style>
-            <div class="hc-wrap">
-                <div class="hc-eyebrow">{esc(eyebrow)}</div>
-                <div class="hc-title">{esc(title)}</div>
-                <div class="hc-counts">
-                    <div class="hc-count"><div class="num">{len(in_names)}</div><div class="lbl">In Camp</div></div>
-                    <div class="hc-count"><div class="num">{len(out_names)}</div><div class="lbl">Out of Camp</div></div>
-                    <div class="hc-count"><div class="num">{len(in_names) + len(out_names)}</div><div class="lbl">Total Active</div></div>
-                </div>
-                <div class="hc-cols">
-                    <div class="hc-col"><h3>In Camp ({len(in_names)})</h3><ul>{in_items}</ul></div>
-                    <div class="hc-col"><h3>Out of Camp ({len(out_names)})</h3><ul>{out_items}</ul></div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    live_count()
-
-    st.markdown("")
-    with st.form("screen_clear_form", clear_on_submit=True):
-        clear_code = st.text_input("Exit code", type="password", max_chars=6)
-        exit_clicked = st.form_submit_button("Exit Screen")
-    if exit_clicked:
-        if match_special_code(clear_code) == "clear":
-            # Lift the campwide emergency and any local head-count screen.
-            set_emergency_flag(False)
-            if "screen" in st.query_params:
-                del st.query_params["screen"]
-            st.rerun()
-        else:
-            st.error("Wrong exit code.")
-
-
 def ensure_headers_once():
     """Fix the logs and vans header rows a single time per session.
 
@@ -3409,19 +3395,6 @@ def _main_body():
     )
     inject_css()
     ensure_headers_once()
-
-    # Emergency is campwide: read the shared flag so every screen flips. Head
-    # count stays local to the machine that opened it, via the URL.
-    if get_emergency_flag():
-        _, staff_names, _ = get_staff_pins_and_lists()
-        render_special_screen("emergency", staff_names)
-        return
-
-    screen = get_screen_mode()
-    if screen == "headcount":
-        _, staff_names, _ = get_staff_pins_and_lists()
-        render_special_screen("headcount", staff_names)
-        return
 
     logo_path = Path("logo-header-2.png")
     if logo_path.exists():
@@ -3482,24 +3455,18 @@ def _main_body():
 
         idle_watch()
 
-    # Background work, one place per page. Who's Out already does emergency
-    # escalation AND late alerts inside its own live board fragment, so it gets
-    # no heartbeat here. Running a second fragment there was doing the same
-    # Google Sheets reads twice on every visit, which is what made switching
-    # pages buffer. The Sign page gets a cheap emergency-only check so it stays
-    # instant for typing. Vans and Admin get the full check, since nothing else
-    # on those pages fires late alerts.
-    if page != "Who's Out":
-        emergency_only = (page == "Sign In / Out")
+    # Late-alert heartbeat. Who's Out fires alerts from its own board fragment,
+    # and the Sign page stays free of network work so typing is instant. That
+    # leaves Vans and Admin, which have no board doing the late check, so they
+    # get a light background tick that only fires deadline alerts.
+    if page in ("Vans", "Admin / History"):
 
         @st.fragment(run_every=BOARD_REFRESH_SECONDS)
         def heartbeat():
             try:
-                escalate_if_emergency_changed("normal")
-                if not emergency_only:
-                    check_late_and_alert(
-                        get_currently_out(merge_recent_writes(load_logs_df_cached()))
-                    )
+                out_now = get_currently_out(merge_recent_writes(load_logs_df_cached()))
+                check_late_and_alert(out_now)
+                check_nightly_summary(out_now)
             except Exception:
                 pass
 
