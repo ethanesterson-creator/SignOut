@@ -673,6 +673,37 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     animation: bcFlashFade 2.4s ease forwards;
 }}
 
+/* Campwide emergency banner. Shown on every page, top of screen, until an
+   admin clears it. Deliberately the loudest thing in the whole app: this is
+   the one case where being impossible to miss matters more than being calm. */
+@keyframes bcEmergencyPulse {{
+    0%, 100% {{ box-shadow: 0 0 0 0 rgba(179,38,30,0.55); }}
+    50% {{ box-shadow: 0 0 0 8px rgba(179,38,30,0); }}
+}}
+.bc-emergency-banner {{
+    background: #B3261E;
+    color: {WHITE};
+    border-radius: 12px;
+    padding: 1rem 1.3rem;
+    margin: 0 0 1.2rem 0;
+    animation: bcEmergencyPulse 2s infinite;
+}}
+.bc-emergency-word {{
+    font-family: 'Archivo', sans-serif;
+    font-size: 1.3rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    color: {WHITE};
+}}
+.bc-emergency-msg {{
+    font-family: 'Public Sans', sans-serif;
+    font-size: 1rem;
+    font-weight: 600;
+    color: {WHITE};
+    margin-top: 0.25rem;
+    opacity: 0.96;
+}}
+
 .bc-footer {{
     margin-top: 2.5rem;
     padding-top: 0.8rem;
@@ -933,6 +964,47 @@ def get_setting(key: str) -> str:
         return str(row.iloc[0]["value"]).strip()
     except Exception:
         return ""
+
+
+EMERGENCY_KEY = "emergency"
+EMERGENCY_MESSAGE_KEY = "emergency_message"
+
+
+def is_emergency_active() -> bool:
+    """True if an admin has declared a campwide emergency.
+
+    The settings tab has carried this flag since the app's first version,
+    but nothing ever actually read it. Board pages pick this up within the
+    normal settings cache window (30s) plus their own refresh tick, so the
+    push notification sent when an emergency is declared is the fast channel
+    - this on-screen banner is the persistent one that follows shortly after.
+    """
+    return get_setting(EMERGENCY_KEY).strip().upper() == "TRUE"
+
+
+def get_emergency_message() -> str:
+    return get_setting(EMERGENCY_MESSAGE_KEY).strip()
+
+
+def set_emergency(active: bool, message: str = ""):
+    set_setting(EMERGENCY_KEY, "TRUE" if active else "FALSE")
+    set_setting(EMERGENCY_MESSAGE_KEY, message if active else "")
+
+
+def render_emergency_banner():
+    """Loud, non-dismissible banner shown at the top of every page while an
+    emergency is active. Cheap to call every render: get_setting is cached."""
+    if not is_emergency_active():
+        return
+    msg = get_emergency_message()
+    msg_html = f"<div class='bc-emergency-msg'>{esc(msg)}</div>" if msg else ""
+    st.markdown(
+        "<div class='bc-emergency-banner'>"
+        "<div class='bc-emergency-word'>&#9888; CAMPWIDE EMERGENCY IN EFFECT</div>"
+        f"{msg_html}"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 # =================================================
@@ -1765,6 +1837,13 @@ def get_currently_out(df: pd.DataFrame) -> pd.DataFrame:
 # someone who was already out for their own reason.
 VAN_SIGNOUT_TAG = "VAN_TRIP"
 
+# Same idea as VAN_SIGNOUT_TAG, for a group activity leaving on foot or by a
+# vehicle this app doesn't track (a field trip, a tournament bus). Lets the
+# leader who took the group out be the one who brings them all back, without
+# touching anyone who was already out for their own separate reason.
+GROUP_SIGNOUT_TAG = "GROUP_TRIP"
+GROUP_PURPOSES = ["Field Trip", "Tournament", "Activity", "Other"]
+
 
 # =================================================
 # LOG ARCHIVING (keep the live tab small, keep 10 years of history)
@@ -2414,6 +2493,71 @@ def signin_everyone_on_van(van_name: str):
     return signed
 
 
+def auto_signout_for_group(party: list, purpose: str, other_purpose: str, tag: str):
+    """Sign out everyone in a group activity's party who is currently IN.
+
+    Same shape as auto_signout_for_van: anyone already OUT for their own
+    reason is left untouched, everyone else gets one batched write tagged so
+    the leader who took them out can find exactly this party to bring back.
+    Returns the list of names signed out.
+    """
+    status_map = get_status_map_fresh()
+    rows = []
+    signed = []
+    for name in party:
+        name = (name or "").strip()
+        if not name:
+            continue
+        info = status_map.get(name)
+        if info and info["status"] == "OUT":
+            continue  # already out, leave their own sign-out alone
+        rows.append({
+            "id": str(uuid.uuid4())[:8],
+            "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
+            "name": name,
+            "reason": purpose,
+            "other_reason": f"{tag}|{other_purpose}" if other_purpose else tag,
+            "action": "OUT",
+            "status": "OUT",
+        })
+        signed.append(name)
+    ok = append_log_rows_batch(rows)
+    return signed if ok else []
+
+
+def signin_everyone_in_group(tag: str):
+    """Sign back in EVERYONE still stuck out under this group trip's tag.
+
+    Reads live state and clears anyone whose current status is a group
+    sign-out carrying THIS exact tag, the same pattern as
+    signin_everyone_on_van, so the leader bringing the group back always
+    frees exactly their own party and nobody else's concurrent trip.
+    """
+    status_map = get_status_map_fresh()
+    rows = []
+    signed = []
+    for name, info in status_map.items():
+        name = (name or "").strip()
+        if not name:
+            continue
+        if (
+            info["status"] == "OUT"
+            and info["other_reason"].strip().startswith(tag)
+        ):
+            rows.append({
+                "id": str(uuid.uuid4())[:8],
+                "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
+                "name": name,
+                "reason": info["reason"],
+                "other_reason": info["other_reason"],
+                "action": "IN",
+                "status": "IN",
+            })
+            signed.append(name)
+    append_log_rows_batch(rows)
+    return signed
+
+
 # Marker written into a log row when an admin signs someone in from the Admin
 # page. Lets the history show a human corrected the board.
 ADMIN_SIGNIN_TAG = "ADMIN_SIGNIN"
@@ -2580,9 +2724,16 @@ def next_available_van(status_map: dict):
 # BOARD RENDERING
 # =================================================
 def clean_other_reason(other_reason: str) -> str:
-    """Hide legacy auto day-off tags from public display."""
+    """Hide internal tracking tags from public display.
+
+    VAN_TRIP and GROUP_TRIP tags exist so a return action can find exactly
+    who it stranded; they were never meant for a counselor reading the board
+    to see. Before this, the board showed raw tags like "VAN_TRIP|Van 1" as
+    someone's detail line, which is neither useful nor good-looking.
+    """
     s = str(other_reason or "").strip()
-    if s.startswith(f"{LEGACY_AUTO_TAG_PREFIX}|"):
+    hidden_prefixes = (LEGACY_AUTO_TAG_PREFIX, VAN_SIGNOUT_TAG, GROUP_SIGNOUT_TAG)
+    if any(s.startswith(f"{p}|") or s == p for p in hidden_prefixes):
         return ""
     return s
 
@@ -2844,13 +2995,21 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
         with uc2:
             st.caption(f"Only if that was a mistake. {max(left, 0)}s left.")
 
+    # The reason carries over from whoever used the kiosk last (see note
+    # below), which is exactly the thing someone in a hurry can miss. Read it
+    # BEFORE the banner so the banner can say it out loud instead of making
+    # people look down at a dropdown to find out what they are about to be
+    # signed out for.
+    pending_reason = st.session_state.get("signout_reason", REASONS[0])
+    out_word = f"SIGNING OUT FOR {pending_reason.upper()}" if pending_reason != "Other (type reason)" else "SIGNING OUT FOR OTHER"
+
     # One box does both, so spell out both directions in large type. A
     # counselor glancing at the screen sees what typing their code will do.
     st.markdown(
         "<div style='display:flex;gap:0.7rem;margin:0.2rem 0 0.9rem 0;'>"
         "<div class='bc-banner bc-banner-out' style='flex:1;margin:0;'>"
-        "<div class='bc-banner-word'>SIGNING OUT?</div>"
-        "<div class='bc-banner-sub'>Pick your reason below, then type your code</div>"
+        f"<div class='bc-banner-word'>{esc(out_word)}</div>"
+        "<div class='bc-banner-sub'>Not right? Change it below, then type your code</div>"
         "</div>"
         "<div class='bc-banner bc-banner-in' style='flex:1;margin:0;'>"
         "<div class='bc-banner-word'>COMING BACK?</div>"
@@ -2863,17 +3022,11 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
 
     # Reason only matters when the code turns out to be a sign-out. It sits
     # above the box and is read only if the person is currently in.
-    # These carry the nonce too. The kiosk is ONE browser session shared by
-    # every counselor, so a fixed key means the previous person's reason is
-    # still selected when the next person walks up. That is how someone taking
-    # a Day Off gets signed out as Night Off, and how a typed "Other" reason
-    # gets attached to the wrong person. Resetting after every action makes
-    # each counselor start from a clean form.
     # Fixed keys, on purpose. The reason stays on whatever the last person
     # picked, so a group all signing out for a Night Off does not have to reset
-    # it every single time. Only the code box resets between people. Counselors
-    # glance at the reason before typing, which is the trade for the
-    # convenience.
+    # it every single time. Only the code box resets between people. The
+    # banner above now names the pending reason out loud, so a counselor who
+    # forgot to check it still sees it before typing their code.
     reason = st.selectbox("Reason (only used if you are signing OUT)", REASONS, key="signout_reason")
     other_reason = ""
     if reason == "Other (type reason)":
@@ -2960,6 +3113,10 @@ def page_whos_out():
 
     @st.fragment(run_every=BOARD_REFRESH_SECONDS)
     def live_board():
+        # This board is the screen most likely to sit unattended, so it gets
+        # its own check on the fragment's normal refresh tick instead of
+        # waiting for a full page rerun like the other pages.
+        render_emergency_banner()
         live_clock_note()
         df_status = merge_recent_writes(load_current_status_df_cached())
         df_out = get_currently_out(df_status)
@@ -3323,6 +3480,117 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
 
     crest_footer()
 
+
+def page_group_signout(staff_pins: dict, staff_names: list):
+    """One leader's code signs a whole group out or back in at once.
+
+    For a field trip, tournament, or activity leaving together without one
+    of the tracked vans. Same trust model as the van flow: the leader's own
+    PIN authorizes the whole party, exactly like a driver's code already
+    does for everyone riding in a van. Nothing here is new risk the app
+    didn't already accept for vans.
+    """
+    page_title("Field Trips & Activities", "Group Sign-Out")
+    st.caption(
+        "For a group leaving together without a tracked van — a field trip, a "
+        "tournament, an off-site activity. One leader signs everyone out at "
+        "once, and brings them all back the same way."
+    )
+
+    if "group_form_nonce" not in st.session_state:
+        st.session_state["group_form_nonce"] = 0
+    g_nonce = st.session_state["group_form_nonce"]
+
+    flash = st.session_state.pop("group_flash", "")
+    if flash:
+        big_flash(flash, "in")
+
+    pin_lookup = build_pin_lookup(staff_pins)
+    leader = st.session_state.get("group_leader")
+
+    # Step 1: who is this? We can't tell take-out from bring-back until we
+    # know the leader's own current status, so identify them first.
+    if not leader:
+        with st.form(f"group_lookup_form_{g_nonce}", clear_on_submit=True):
+            leader_code = st.text_input("Leader code", type="password", max_chars=4, key=f"group_leader_code_{g_nonce}")
+            lookup_go = st.form_submit_button("Continue", use_container_width=True)
+        if lookup_go:
+            found, err = resolve_code(leader_code, pin_lookup)
+            if err:
+                st.error(err)
+            else:
+                st.session_state["group_leader"] = found
+                st.rerun()
+        crest_footer()
+        return
+
+    if st.button("Not you? Start over", key="group_cancel"):
+        st.session_state.pop("group_leader", None)
+        st.rerun()
+
+    info = get_status_fresh(leader)
+    is_leading_trip = bool(
+        info and info["status"] == "OUT" and info["other_reason"].startswith(GROUP_SIGNOUT_TAG)
+    )
+
+    st.divider()
+
+    # ---------------- BRING THE GROUP BACK ----------------
+    if is_leading_trip:
+        tag = info["other_reason"].strip()
+        purpose = info["reason"]
+        big_banner(f"BRINGING BACK {leader.upper()}'S GROUP", f"Signed out for {purpose}", "in")
+        if st.button("Sign This Group Back In", key="group_bring_back", use_container_width=True):
+            freed = signin_everyone_in_group(tag)
+            notify_vans("Bauercrest: Group IN", f"{leader}'s group ({purpose}) is back: {len(freed)} signed in.")
+            st.session_state["group_form_nonce"] += 1
+            st.session_state.pop("group_leader", None)
+            st.session_state["group_flash"] = (
+                f"{len(freed)} signed back in: {', '.join(freed)}" if freed
+                else "Nobody was still out under that trip."
+            )
+            st.rerun()
+
+    # ---------------- TAKE THE GROUP OUT ----------------
+    else:
+        big_banner(f"{leader.upper()} TAKING A GROUP OUT", "Pick who's going, then confirm", "out")
+        status_map = get_status_map_fresh()
+        in_names = sorted(
+            n for n in staff_names
+            if n != leader and status_map.get(n, {}).get("status") != "OUT"
+        )
+        with st.form(f"group_take_form_{g_nonce}", clear_on_submit=False):
+            purpose = st.selectbox("Purpose", GROUP_PURPOSES)
+            other_purpose = ""
+            if purpose == "Other":
+                other_purpose = st.text_input("Other purpose (required)")
+            party = st.multiselect("Who else is going (besides you)?", in_names)
+            take_go = st.form_submit_button(
+                f"Sign Out Group ({len(party) + 1} incl. you)", use_container_width=True
+            )
+
+        if take_go:
+            if purpose == "Other" and not other_purpose.strip():
+                st.error("Please enter the other purpose.")
+            elif not party:
+                st.error("Pick at least one other person. For just yourself, use the main Sign In / Out page.")
+            else:
+                full_party = [leader] + party
+                trip_tag = f"{GROUP_SIGNOUT_TAG}|{uuid.uuid4().hex[:8]}"
+                signed = auto_signout_for_group(full_party, purpose, other_purpose.strip(), trip_tag)
+                ptext = other_purpose.strip() if (purpose == "Other" and other_purpose.strip()) else purpose
+                notify_vans("Bauercrest: Group OUT", f"{leader} took {len(signed)} out: {ptext}")
+                st.session_state["group_form_nonce"] += 1
+                st.session_state.pop("group_leader", None)
+                st.session_state["group_flash"] = (
+                    f"{len(signed)} signed out for {ptext}: {', '.join(signed)}" if signed
+                    else "Everyone selected was already signed out."
+                )
+                st.rerun()
+
+    crest_footer()
+
+
 def page_admin_history(staff_pins: dict):
     page_title("Office Use Only", "Admin / History")
     ADMIN_PASSWORD = st.secrets.get("admin_password", "")
@@ -3350,6 +3618,64 @@ def page_admin_history(staff_pins: dict):
             st.session_state.admin_authenticated = False
             st.success("Admin area locked again.")
             st.rerun()
+
+    # -------------------------------------------------
+    # CAMPWIDE EMERGENCY: the most urgent control on this page, so it sits
+    # above everything else here.
+    # -------------------------------------------------
+    section_title("Campwide Emergency")
+
+    em_flash = st.session_state.pop("emergency_flash", "")
+    if em_flash:
+        st.success(em_flash)
+    em_err = st.session_state.pop("emergency_error", "")
+    if em_err:
+        st.error(em_err)
+
+    if is_emergency_active():
+        active_msg = get_emergency_message()
+        st.error("EMERGENCY IS ACTIVE" + (f" — {active_msg}" if active_msg else ""))
+        st.caption("Every page (Sign In/Out, Who's Out, Vans, Admin) is showing this banner right now.")
+        with st.form("emergency_clear_form", clear_on_submit=True):
+            em_clear_code = st.text_input("Your admin code", type="password", max_chars=4, key="emergency_clear_code")
+            em_clear_go = st.form_submit_button("Clear Emergency")
+        if em_clear_go:
+            admin_name, err = resolve_admin_code(em_clear_code, staff_pins)
+            if err:
+                st.session_state["emergency_error"] = err
+            else:
+                set_emergency(False)
+                notify_phone("Bauercrest: Emergency CLEARED", f"Cleared by {admin_name}.")
+                st.session_state["emergency_flash"] = f"Emergency cleared by {admin_name}."
+            st.rerun()
+    else:
+        st.caption(
+            "Puts a red banner on every page, campwide, until an admin clears it. "
+            "Use for a real emergency only — this is deliberately hard to miss."
+        )
+        with st.form("emergency_declare_form", clear_on_submit=True):
+            em_msg = st.text_input(
+                "Message shown to everyone (optional)",
+                key="emergency_declare_msg",
+                placeholder="e.g. Meet at the flagpole",
+            )
+            em_declare_code = st.text_input("Your admin code", type="password", max_chars=4, key="emergency_declare_code")
+            em_confirm = st.checkbox("I understand this puts a red banner on every screen, campwide.")
+            em_go = st.form_submit_button("DECLARE EMERGENCY")
+        if em_go:
+            admin_name, err = resolve_admin_code(em_declare_code, staff_pins)
+            if err:
+                st.session_state["emergency_error"] = err
+            elif not em_confirm:
+                st.session_state["emergency_error"] = "Tick the confirm box first."
+            else:
+                set_emergency(True, em_msg.strip())
+                detail = f" {em_msg.strip()}" if em_msg.strip() else ""
+                notify_phone("Bauercrest: EMERGENCY DECLARED", f"By {admin_name}.{detail}")
+                st.session_state["emergency_flash"] = f"Emergency declared by {admin_name}."
+            st.rerun()
+
+    st.markdown("---")
 
     # -------------------------------------------------
     # ADMIN SIGN-IN: fix the board when someone forgot
@@ -3728,7 +4054,7 @@ def _main_body():
 
     page = st.sidebar.radio(
         "Go to",
-        ["Sign In / Out", "Who's Out", "Vans", "Admin / History"],
+        ["Sign In / Out", "Who's Out", "Vans", "Group Sign-Out", "Admin / History"],
         key="main_page_radio",
     )
 
@@ -3743,12 +4069,16 @@ def _main_body():
     # falsely count as activity.
     st.session_state["kiosk_active_at"] = datetime.now(TZ)
 
+    render_emergency_banner()
+
     if page == "Sign In / Out":
         page_sign_in_out(staff_pins, staff_names)
     elif page == "Who's Out":
         page_whos_out()
     elif page == "Vans":
         page_vans(staff_pins, staff_names, driver_names)
+    elif page == "Group Sign-Out":
+        page_group_signout(staff_pins, staff_names)
     elif page == "Admin / History":
         page_admin_history(staff_pins)
 
@@ -3773,9 +4103,10 @@ def _main_body():
 
     # Late-alert heartbeat. Who's Out fires alerts from its own board fragment,
     # and the Sign page stays free of network work so typing is instant. That
-    # leaves Vans and Admin, which have no board doing the late check, so they
-    # get a light background tick that only fires deadline alerts.
-    if page in ("Vans", "Admin / History"):
+    # leaves Vans, Group Sign-Out, and Admin, which have no board doing the
+    # late check, so they get a light background tick that only fires
+    # deadline alerts.
+    if page in ("Vans", "Group Sign-Out", "Admin / History"):
 
         @st.fragment(run_every=BOARD_REFRESH_SECONDS)
         def heartbeat():
