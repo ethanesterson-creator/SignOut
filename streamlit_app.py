@@ -437,21 +437,19 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
 .bc-vantile-sel {{ box-shadow: 0 0 0 4px rgba(19,41,75,0.25); }}
 
 /* Big confirmation banner. Deliberately loud: a counselor who typed their
-   code must SEE which direction they just went. Shown for about 5 seconds,
-   then fades on its own so it never becomes a stale, easy-to-ignore leftover
-   message. Same proven fade approach as bcFlashFade above, just held longer
-   since this banner carries more to read. */
+   code must SEE which direction they just went. Just a quick pop-in here -
+   actual removal after FLASH_DISPLAY_SECONDS is handled server-side by a
+   fragment (see flash_ticker in page_sign_in_out), which really removes the
+   element instead of leaving an invisible box holding its space open. */
 @keyframes bcBigFlash {{
     0%   {{ opacity: 0; transform: translateY(-6px); }}
-    5%   {{ opacity: 1; transform: translateY(0); }}
-    90%  {{ opacity: 1; }}
-    100% {{ opacity: 0; }}
+    100% {{ opacity: 1; transform: translateY(0); }}
 }}
 .bc-bigflash {{
     border-radius: 14px;
     padding: 1.1rem 1.3rem;
     margin-bottom: 0.9rem;
-    animation: bcBigFlash 6s ease forwards;
+    animation: bcBigFlash 0.25s ease forwards;
 }}
 .bc-bigflash-word {{
     font-family: 'Archivo', sans-serif;
@@ -1696,6 +1694,13 @@ UNDO_WINDOW_SECONDS = 120
 # be waiting when the next counselor walks up.
 VAN_SELECT_TIMEOUT_SECONDS = 90
 
+# How long the big "SIGNED IN/OUT" confirmation banner stays up before it
+# clears itself. The Sign In/Out page never auto-refreshes on its own (typing
+# must never be interrupted), so a pure CSS fade would still leave the banner
+# holding its layout space open indefinitely if nobody touches the kiosk
+# again. A small fragment ticks this down and removes the banner for real.
+FLASH_DISPLAY_SECONDS = 5
+
 
 def delete_log_row_by_id(row_id: str) -> bool:
     """Delete one log row by its id. True if it was removed.
@@ -2398,15 +2403,21 @@ def upsert_current_status_rows(rows: list) -> bool:
         return True
     try:
         sheet = get_current_status_sheet()
-        existing = sheet.get_all_values()
-        header = existing[0] if existing else list(CURRENT_STATUS_HEADERS)
-        body = existing[1:] if len(existing) > 1 else []
+        # Reuse the cached read instead of a fresh get_all_values() call. The
+        # caller almost always just did a fresh status read (get_status_fresh /
+        # get_status_map_fresh) moments ago in this same click, so this is
+        # usually served from cache for free - cutting a full extra network
+        # round trip off of every single sign-in/out. read_sheet_df never
+        # reorders rows, so the DataFrame's row i is always sheet row i+2.
+        df = load_current_status_df_cached()
+        header = df.columns.tolist() if not df.empty else list(CURRENT_STATUS_HEADERS)
         name_i = header.index("name") if "name" in header else 0
 
         row_num_by_name = {}
-        for i, r in enumerate(body):
-            if len(r) > name_i and str(r[name_i]).strip():
-                row_num_by_name[str(r[name_i]).strip()] = i + 2  # 1 header + 1-index
+        if not df.empty:
+            for i, nm in enumerate(df[header[name_i]].astype(str).str.strip()):
+                if nm:
+                    row_num_by_name[nm] = i + 2  # 1 header + 1-index
 
         updates = []
         appends = []
@@ -3173,14 +3184,32 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
         st.session_state["signio_nonce"] = 0
     n = st.session_state["signio_nonce"]
 
-    flash = st.session_state.pop("log_flash", "")
-    if flash:
+    # A message set just now (this exact rerun) has no timestamp yet - stamp
+    # it once, here, centrally, rather than touching every place that sets
+    # log_flash. Expiry always clears the timestamp together with the message
+    # (below), so "message present, no timestamp" only ever means "brand new".
+    if st.session_state.get("log_flash") and "log_flash_at" not in st.session_state:
+        st.session_state["log_flash_at"] = datetime.now(TZ)
+
+    @st.fragment(run_every=1)
+    def flash_ticker():
+        msg = st.session_state.get("log_flash", "")
+        if not msg:
+            return
+        at = st.session_state.get("log_flash_at")
+        age = (datetime.now(TZ) - at).total_seconds() if at else FLASH_DISPLAY_SECONDS
+        if age >= FLASH_DISPLAY_SECONDS:
+            for k in ("log_flash", "log_flash_kind", "log_flash_word", "log_flash_ask", "log_flash_at"):
+                st.session_state.pop(k, None)
+            return
         big_flash(
-            flash,
-            st.session_state.pop("log_flash_kind", "in"),
-            st.session_state.pop("log_flash_word", ""),
-            st.session_state.pop("log_flash_ask", ""),
+            msg,
+            st.session_state.get("log_flash_kind", "in"),
+            st.session_state.get("log_flash_word", ""),
+            st.session_state.get("log_flash_ask", ""),
         )
+
+    flash_ticker()
 
     # Undo sits right under the banner, so the person who just made the
     # mistake sees it immediately. It disappears on its own after the window.
