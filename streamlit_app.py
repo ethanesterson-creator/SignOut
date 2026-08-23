@@ -30,6 +30,7 @@ SHEET_DRIVERS = "drivers"
 SHEET_DAYS_OFF = "days_off"  # optional tab; used for the Day Off board (display only)
 SHEET_SETTINGS = "settings"  # auto-created; holds the campwide emergency flag
 SHEET_LOGS_ARCHIVE = "logs_archive"  # auto-created; permanent history moved out of the live tab
+SHEET_VANS_ARCHIVE = "vans_archive"  # auto-created; same idea, for the vans tab
 
 # When archiving, always keep rows from at least this many days back in the
 # live tab, on top of keeping every row for anyone currently out. A day-off
@@ -2033,6 +2034,146 @@ def archive_old_logs():
     return result
 
 
+def get_vans_archive_sheet():
+    """Get the vans archive tab, creating it (with the live header) if missing.
+    Same idea as get_logs_archive_sheet, one tab down."""
+    try:
+        return get_worksheet(SHEET_VANS_ARCHIVE)
+    except WorksheetNotFound:
+        ss = get_spreadsheet()
+        sheet = ss.add_worksheet(title=SHEET_VANS_ARCHIVE, rows=200, cols=len(VANS_HEADERS_REQUIRED))
+        sheet.update("A1", [list(VANS_HEADERS_REQUIRED)])
+        try:
+            get_worksheet.clear()
+        except Exception:
+            pass
+        return sheet
+
+
+def plan_van_archive(vans_df: pd.DataFrame, raw_rows: list, header: list, now=None):
+    """Same rule as plan_archive, keyed on van instead of name:
+      - Keep EVERY row for any van whose latest status is OUT.
+      - Keep any row newer than the keep-days window.
+      - Keep any row we cannot confidently date.
+      - Everything else moves to the archive.
+
+    Only 3 vans exist, so this is cheap to compute directly every time; there
+    is no fast-cache equivalent to current_status needed here.
+    """
+    now = now or datetime.now(TZ)
+    cutoff = now - timedelta(days=ARCHIVE_KEEP_DAYS)
+
+    status_map = compute_van_status(vans_df)
+    out_vans = {v for v in VANS if status_map.get(v, {}).get("status") == "OUT"}
+
+    try:
+        van_i = header.index("van")
+    except ValueError:
+        van_i = 2
+    try:
+        ts_i = header.index("timestamp")
+    except ValueError:
+        ts_i = 1
+
+    keep_rows, archive_rows = [], []
+    for raw in raw_rows:
+        row = list(raw) + [""] * (len(header) - len(raw))
+        row = row[:len(header)]
+        van = str(row[van_i]).strip() if van_i < len(row) else ""
+        ts_value = row[ts_i] if ts_i < len(row) else ""
+
+        if van in out_vans:
+            keep_rows.append(row)
+        elif not _row_age_ok_to_archive(ts_value, cutoff):
+            keep_rows.append(row)
+        else:
+            archive_rows.append(row)
+    return keep_rows, archive_rows
+
+
+def archive_old_vans():
+    """Move old, closed-out van log rows to the archive tab.
+
+    Identical shape and identical safety guarantees to archive_old_logs:
+    copy first, verify the copy landed, only then shrink the live tab. See
+    archive_old_logs for the full reasoning.
+    """
+    result = {"ok": False, "archived": 0, "kept": 0, "message": ""}
+    try:
+        live = get_vans_sheet()
+        all_vals = live.get_all_values()
+    except Exception:
+        result["message"] = "Could not read the live vans tab. Nothing was changed."
+        return result
+
+    if not all_vals:
+        result["message"] = "The vans tab looks empty. Nothing to archive."
+        return result
+
+    header = all_vals[0]
+    raw_rows = all_vals[1:]
+    if len(raw_rows) == 0:
+        result["message"] = "No van log rows yet. Nothing to archive."
+        return result
+
+    vans_df = read_sheet_df(live)
+    keep_rows, archive_rows = plan_van_archive(vans_df, raw_rows, header)
+    result["kept"] = len(keep_rows)
+
+    if not archive_rows:
+        result["ok"] = True
+        result["message"] = f"Nothing old enough to archive. All {len(keep_rows)} rows are recent or still open."
+        return result
+
+    try:
+        arch = get_vans_archive_sheet()
+        before = len(arch.get_all_values())
+        for i in range(0, len(archive_rows), 500):
+            arch.append_rows(archive_rows[i:i + 500])
+        after = len(arch.get_all_values())
+    except Exception:
+        result["message"] = "Could not write to the van archive tab. Live van logs were left untouched, nothing was lost."
+        return result
+
+    if after != before + len(archive_rows):
+        result["message"] = (
+            "Archive copy did not verify (expected "
+            f"{before + len(archive_rows)} rows, found {after}). Live van logs "
+            "were left untouched. Check the vans_archive tab, then try again."
+        )
+        return result
+
+    try:
+        new_live = [header] + keep_rows
+        live.update("A1", new_live)
+        old_total = len(all_vals)
+        new_total = len(new_live)
+        if old_total > new_total:
+            live.delete_rows(new_total + 1, old_total)
+        clear_vans_cache()
+        try:
+            get_van_headers.clear()
+        except Exception:
+            pass
+    except Exception:
+        result["message"] = (
+            f"Archived {len(archive_rows)} rows to vans_archive, but shrinking the "
+            "live tab did not fully finish. Nothing was lost. Run it once more, "
+            "or check the vans tab."
+        )
+        result["archived"] = len(archive_rows)
+        return result
+
+    result["ok"] = True
+    result["archived"] = len(archive_rows)
+    result["message"] = (
+        f"Archived {len(archive_rows)} old van rows to vans_archive. The live tab "
+        f"now holds {len(keep_rows)} rows (every van still out, plus the last "
+        f"{ARCHIVE_KEEP_DAYS} days). Nothing was deleted, only moved."
+    )
+    return result
+
+
 def check_auto_archive():
     """Run the archive once a day on its own, so the live tab never grows
     unbounded just because nobody remembered to click the admin button.
@@ -2058,6 +2199,7 @@ def check_auto_archive():
         # both kick off an archive run at once.
         set_setting(AUTO_ARCHIVE_KEY, today)
         archive_old_logs()
+        archive_old_vans()
     except Exception:
         pass
 
@@ -2075,6 +2217,30 @@ def build_full_history_csv() -> str:
         pass
     try:
         frames.append(read_sheet_df(get_logs_archive_sheet()))
+    except Exception:
+        pass
+    frames = [f for f in frames if f is not None and not f.empty]
+    if not frames:
+        return ""
+    full = pd.concat(frames, ignore_index=True)
+    if "id" in full.columns:
+        full = full.drop_duplicates(subset=["id"], keep="first")
+    if "timestamp" in full.columns:
+        full["_ts"] = pd.to_datetime(full["timestamp"], errors="coerce")
+        full = full.sort_values("_ts", na_position="first").drop(columns=["_ts"])
+    return full.to_csv(index=False)
+
+
+def build_full_van_history_csv() -> str:
+    """Live + archive van logs, combined and sorted oldest to newest.
+    Same idea as build_full_history_csv, for the vans tab."""
+    frames = []
+    try:
+        frames.append(read_sheet_df(get_vans_sheet()))
+    except Exception:
+        pass
+    try:
+        frames.append(read_sheet_df(get_vans_archive_sheet()))
     except Exception:
         pass
     frames = [f for f in frames if f is not None and not f.empty]
@@ -2952,8 +3118,6 @@ def whos_out_strip():
 
 
 def page_sign_in_out(staff_pins: dict, staff_names: list):
-    page_title("Camp Bauercrest Staff", "Sign In / Out")
-
     pin_lookup = build_pin_lookup(staff_pins)
 
     # Bumping this nonce changes the code field key, so the box comes back
@@ -2962,150 +3126,171 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
         st.session_state["signio_nonce"] = 0
     n = st.session_state["signio_nonce"]
 
-    flash = st.session_state.pop("log_flash", "")
-    if flash:
-        big_flash(
-            flash,
-            st.session_state.pop("log_flash_kind", "in"),
-            st.session_state.pop("log_flash_word", ""),
-            st.session_state.pop("log_flash_ask", ""),
-        )
+    # The whole page lives in a centered, comfortably-wide column instead of
+    # sprawling edge to edge. The app runs in wide mode for the board pages'
+    # card grids, but this is a single focused form, and letting it stretch
+    # across a big kiosk monitor makes it feel sparse instead of deliberate.
+    _, col_mid, _ = st.columns([1, 3, 1])
+    with col_mid:
+        page_title("Camp Bauercrest Staff", "Sign In / Out")
 
-    # Undo sits right under the banner, so the person who just made the mistake
-    # sees it immediately. It disappears on its own after the window.
-    undo = get_pending_undo()
-    if undo:
-        left = int(UNDO_WINDOW_SECONDS - (datetime.now(TZ) - undo["at"]).total_seconds())
-        # The name goes ON the button. The kiosk is shared, so the next
-        # counselor in line will see this too, and "Undo" alone invites them to
-        # tap it. Naming the person makes it obvious whose action it is.
-        uc1, uc2 = st.columns([2, 3])
-        with uc1:
-            if st.button(f"Undo {undo['desc']}", key="undo_btn", use_container_width=True):
-                if delete_log_row_by_id(undo["id"]):
-                    notify_phone("Bauercrest: UNDO", f"Undo: {undo['desc']}")
-                    st.session_state["log_flash"] = f"Undone: {undo['desc']}"
-                    st.session_state["log_flash_kind"] = "out"
-                    st.session_state["log_flash_word"] = "UNDONE"
-                else:
-                    st.session_state["log_flash"] = "Nothing to undo. That record is already gone."
-                st.session_state.pop("undo_action", None)
-                st.session_state["signio_nonce"] += 1
-                st.rerun()
-        with uc2:
-            st.caption(f"Only if that was a mistake. {max(left, 0)}s left.")
+        flash = st.session_state.pop("log_flash", "")
+        if flash:
+            big_flash(
+                flash,
+                st.session_state.pop("log_flash_kind", "in"),
+                st.session_state.pop("log_flash_word", ""),
+                st.session_state.pop("log_flash_ask", ""),
+            )
 
-    # The reason carries over from whoever used the kiosk last (see note
-    # below), which is exactly the thing someone in a hurry can miss. Read it
-    # BEFORE the banner so the banner can say it out loud instead of making
-    # people look down at a dropdown to find out what they are about to be
-    # signed out for.
-    pending_reason = st.session_state.get("signout_reason", REASONS[0])
-    out_word = f"SIGNING OUT FOR {pending_reason.upper()}" if pending_reason != "Other (type reason)" else "SIGNING OUT FOR OTHER"
+        # Undo sits right under the banner, so the person who just made the
+        # mistake sees it immediately. It disappears on its own after the window.
+        undo = get_pending_undo()
+        if undo:
+            left = int(UNDO_WINDOW_SECONDS - (datetime.now(TZ) - undo["at"]).total_seconds())
+            # The name goes ON the button. The kiosk is shared, so the next
+            # counselor in line will see this too, and "Undo" alone invites them
+            # to tap it. Naming the person makes it obvious whose action it is.
+            uc1, uc2 = st.columns([2, 3])
+            with uc1:
+                if st.button(f"Undo {undo['desc']}", key="undo_btn", use_container_width=True):
+                    if delete_log_row_by_id(undo["id"]):
+                        notify_phone("Bauercrest: UNDO", f"Undo: {undo['desc']}")
+                        st.session_state["log_flash"] = f"Undone: {undo['desc']}"
+                        st.session_state["log_flash_kind"] = "out"
+                        st.session_state["log_flash_word"] = "UNDONE"
+                    else:
+                        st.session_state["log_flash"] = "Nothing to undo. That record is already gone."
+                    st.session_state.pop("undo_action", None)
+                    st.session_state["signio_nonce"] += 1
+                    st.rerun()
+            with uc2:
+                st.caption(f"Only if that was a mistake. {max(left, 0)}s left.")
 
-    # One box does both, so spell out both directions in large type. A
-    # counselor glancing at the screen sees what typing their code will do.
-    st.markdown(
-        "<div style='display:flex;gap:0.7rem;margin:0.2rem 0 0.9rem 0;'>"
-        "<div class='bc-banner bc-banner-out' style='flex:1;margin:0;'>"
-        f"<div class='bc-banner-word'>{esc(out_word)}</div>"
-        "<div class='bc-banner-sub'>Not right? Change it below, then type your code</div>"
-        "</div>"
-        "<div class='bc-banner bc-banner-in' style='flex:1;margin:0;'>"
-        "<div class='bc-banner-word'>COMING BACK?</div>"
-        "<div class='bc-banner-sub'>Type your code. Skip the reason</div>"
-        "</div>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-    st.caption("One box does both. If you are in camp you go out. If you are out you come back in.")
-
-    # Reason only matters when the code turns out to be a sign-out. It sits
-    # above the box and is read only if the person is currently in.
-    # Fixed keys, on purpose. The reason stays on whatever the last person
-    # picked, so a group all signing out for a Night Off does not have to reset
-    # it every single time. Only the code box resets between people. The
-    # banner above now names the pending reason out loud, so a counselor who
-    # forgot to check it still sees it before typing their code.
-    reason = st.selectbox("Reason (only used if you are signing OUT)", REASONS, key="signout_reason")
-    other_reason = ""
-    if reason == "Other (type reason)":
-        other_reason = st.text_input("Type your reason", key="signout_other_reason")
-
-    with st.form("signio_form", clear_on_submit=False):
-        code = st.text_input("Your code", type="password", max_chars=4, key=f"signio_code_{n}")
-        submitted = st.form_submit_button("Enter", use_container_width=True)
-
-    if submitted:
-        name, err = resolve_code(code, pin_lookup)
-        if err:
-            st.error(err)
+        # The reason carries over from whoever used the kiosk last (see note
+        # below), which is exactly the thing someone in a hurry can miss. Read it
+        # BEFORE the banner so the banner can say it out loud instead of making
+        # people look down at a dropdown to find out what they are about to be
+        # signed out for.
+        pending_reason = st.session_state.get("signout_reason", REASONS[0])
+        pending_other = st.session_state.get(f"signout_other_reason_{n}", "").strip()
+        if pending_reason != "Other (type reason)":
+            out_word = f"SIGNING OUT FOR {pending_reason.upper()}"
+        elif pending_other:
+            out_word = f"SIGNING OUT FOR {pending_other.upper()}"
         else:
-            # Decide direction from a FRESH read, never the cache. This is
-            # a toggle, so a stale read would not just show old data, it
-            # would flip the wrong way and sign someone OUT twice.
-            info = get_status_fresh(name)
-            is_out = bool(info and info["status"] == "OUT")
+            out_word = "SIGNING OUT FOR OTHER (TYPE IT BELOW)"
 
-            if is_out:
-                due = effective_due_back(info.get("reason", ""), info.get("timestamp", ""))
-                mins = minutes_late(due)
+        # One box does both, so spell out both directions in large type. A
+        # counselor glancing at the screen sees what typing their code will do.
+        st.markdown(
+            "<div style='display:flex;gap:0.7rem;margin:0.2rem 0 0.9rem 0;'>"
+            "<div class='bc-banner bc-banner-out' style='flex:1;margin:0;'>"
+            f"<div class='bc-banner-word'>{esc(out_word)}</div>"
+            "<div class='bc-banner-sub'>Not right? Change it below, then type your code</div>"
+            "</div>"
+            "<div class='bc-banner bc-banner-in' style='flex:1;margin:0;'>"
+            "<div class='bc-banner-word'>COMING BACK?</div>"
+            "<div class='bc-banner-sub'>Type your code. Skip the reason</div>"
+            "</div>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        st.caption("One box does both. If you are in camp you go out. If you are out you come back in.")
 
-                # THE FORK. If signing them in would be surprising (stale
-                # sign-out, likely a forgotten sign-in), do not guess. Stop and
-                # ask whether they are coming in or leaving again now. Everyone
-                # whose state is fresh skips this entirely.
-                if is_surprising_signin(info):
-                    st.session_state["pending_fork"] = {
-                        "name": name,
-                        "reason": info.get("reason", ""),
-                        "other_reason": info.get("other_reason", ""),
-                        "timestamp": info.get("timestamp", ""),
-                        "mins": mins,
-                    }
+        # Reason only matters when the code turns out to be a sign-out. It sits
+        # above the box and is read only if the person is currently in.
+        # Fixed keys, on purpose. The reason stays on whatever the last person
+        # picked, so a group all signing out for a Night Off does not have to
+        # reset it every single time. Only the code box resets between people.
+        # The banner above now names the pending reason out loud, so a
+        # counselor who forgot to check it still sees it before typing their
+        # code.
+        reason = st.selectbox("Reason (only used if you are signing OUT)", REASONS, key="signout_reason")
+        other_reason = ""
+        if reason == "Other (type reason)":
+            # Nonce-scoped, unlike the reason dropdown above. A shared dropdown
+            # value ("Night Off") commonly applies to the next person too, but a
+            # typed detail ("dentist appointment") almost never does, and being
+            # free text makes a leftover value much easier to miss than a
+            # dropdown that visibly still says the wrong thing. This clears it
+            # after every action, same as the code box.
+            other_reason = st.text_input("Type your reason", key=f"signout_other_reason_{n}")
+
+        with st.form("signio_form", clear_on_submit=False):
+            code = st.text_input("Your code", type="password", max_chars=4, key=f"signio_code_{n}")
+            submitted = st.form_submit_button("Enter", use_container_width=True)
+
+        if submitted:
+            name, err = resolve_code(code, pin_lookup)
+            if err:
+                st.error(err)
+            else:
+                # Decide direction from a FRESH read, never the cache. This is
+                # a toggle, so a stale read would not just show old data, it
+                # would flip the wrong way and sign someone OUT twice.
+                info = get_status_fresh(name)
+                is_out = bool(info and info["status"] == "OUT")
+
+                if is_out:
+                    due = effective_due_back(info.get("reason", ""), info.get("timestamp", ""))
+                    mins = minutes_late(due)
+
+                    # THE FORK. If signing them in would be surprising (stale
+                    # sign-out, likely a forgotten sign-in), do not guess. Stop
+                    # and ask whether they are coming in or leaving again now.
+                    # Everyone whose state is fresh skips this entirely.
+                    if is_surprising_signin(info):
+                        st.session_state["pending_fork"] = {
+                            "name": name,
+                            "reason": info.get("reason", ""),
+                            "other_reason": info.get("other_reason", ""),
+                            "timestamp": info.get("timestamp", ""),
+                            "mins": mins,
+                        }
+                        st.session_state["signio_nonce"] += 1
+                        st.rerun()
+
+                    # Normal, recent sign-in: carry their reason, note lateness.
+                    late_note = f"LATE {mins} min" if mins > 0 else ""
+                    new_id = append_log_row(
+                        name,
+                        info.get("reason", ""),
+                        info.get("other_reason", ""),
+                        action="IN",
+                        status="IN",
+                        late=late_note,
+                    )
+                    set_pending_undo(new_id, f"{name}'s sign-in")
+                    st.session_state["log_flash_kind"] = "in"
+                    st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED IN"
+                    if mins > 0:
+                        notify_phone(
+                            "Bauercrest: Signed IN (LATE)",
+                            f"{name} signed in {mins} min late ({info.get('reason','')})",
+                        )
+                        st.session_state["log_flash"] = f"Welcome back. You were {mins} min late."
+                    else:
+                        st.session_state["log_flash"] = "Welcome back to camp."
+                    st.session_state["signio_nonce"] += 1
+                    st.rerun()
+                elif reason == "Other (type reason)" and not other_reason.strip():
+                    st.error("Please type a reason for 'Other'.")
+                else:
+                    due = compute_due_back(reason, datetime.now(TZ))
+                    new_id = append_log_row(name, reason, other_reason, action="OUT", status="OUT", due_back=due)
+                    set_pending_undo(new_id, f"{name}'s sign-out")
+                    st.session_state["log_flash_kind"] = "out"
+                    st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED OUT"
+                    st.session_state["log_flash"] = f"Reason: {reason if reason != 'Other (type reason)' else other_reason}. Sign back in when you return."
                     st.session_state["signio_nonce"] += 1
                     st.rerun()
 
-                # Normal, recent sign-in: carry their reason, note lateness.
-                late_note = f"LATE {mins} min" if mins > 0 else ""
-                new_id = append_log_row(
-                    name,
-                    info.get("reason", ""),
-                    info.get("other_reason", ""),
-                    action="IN",
-                    status="IN",
-                    late=late_note,
-                )
-                set_pending_undo(new_id, f"{name}'s sign-in")
-                st.session_state["log_flash_kind"] = "in"
-                st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED IN"
-                if mins > 0:
-                    notify_phone(
-                        "Bauercrest: Signed IN (LATE)",
-                        f"{name} signed in {mins} min late ({info.get('reason','')})",
-                    )
-                    st.session_state["log_flash"] = f"Welcome back. You were {mins} min late."
-                else:
-                    st.session_state["log_flash"] = "Welcome back to camp."
-                st.session_state["signio_nonce"] += 1
-                st.rerun()
-            elif reason == "Other (type reason)" and not other_reason.strip():
-                st.error("Please type a reason for 'Other'.")
-            else:
-                due = compute_due_back(reason, datetime.now(TZ))
-                new_id = append_log_row(name, reason, other_reason, action="OUT", status="OUT", due_back=due)
-                set_pending_undo(new_id, f"{name}'s sign-out")
-                st.session_state["log_flash_kind"] = "out"
-                st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED OUT"
-                st.session_state["log_flash"] = f"Reason: {reason if reason != 'Other (type reason)' else other_reason}. Sign back in when you return."
-                st.session_state["signio_nonce"] += 1
-                st.rerun()
+        render_stale_fork(reason, other_reason)
 
-    render_stale_fork(reason, other_reason)
+        whos_out_strip()
 
-    whos_out_strip()
-
-    crest_footer()
+        crest_footer()
 
 
 def page_whos_out():
@@ -3863,6 +4048,72 @@ def page_admin_history(staff_pins: dict):
     st.markdown("---")
 
     # -------------------------------------------------
+    # VAN ARCHIVE: same idea as the logs archive, for the vans tab
+    # -------------------------------------------------
+    section_title("Archive Old Van Logs")
+    st.caption(
+        "Moves old, closed-out van trips to a separate vans_archive tab, same "
+        "idea as the logs archive above. Every van still out is kept, plus the "
+        f"last {ARCHIVE_KEEP_DAYS} days. Nothing is ever deleted, only moved. "
+        f"This also runs automatically every night around {AUTO_ARCHIVE_HOUR}:00 "
+        "AM — use the button below only if you want it to run right now."
+    )
+
+    van_arch_flash = st.session_state.pop("van_archive_flash", "")
+    if van_arch_flash:
+        st.success(van_arch_flash)
+    van_arch_err = st.session_state.pop("van_archive_error", "")
+    if van_arch_err:
+        st.error(van_arch_err)
+
+    with st.form("van_archive_form", clear_on_submit=True):
+        st.caption("Type your admin code and confirm to archive.")
+        van_arch_code = st.text_input("Your admin code", type="password", max_chars=4, key="van_archive_admin_code")
+        van_arch_confirm = st.checkbox("I understand old closed-out van rows will be moved to the archive tab.")
+        van_arch_go = st.form_submit_button("Archive Old Van Logs Now")
+
+    if van_arch_go:
+        admin_name, err = resolve_admin_code(van_arch_code, staff_pins)
+        if err:
+            st.session_state["van_archive_error"] = err
+            st.rerun()
+        elif not van_arch_confirm:
+            st.session_state["van_archive_error"] = "Tick the confirm box first."
+            st.rerun()
+        else:
+            with st.spinner("Archiving van logs..."):
+                van_res = archive_old_vans()
+            if van_res["ok"]:
+                notify_phone("Bauercrest: Van logs archived", f"{admin_name} archived {van_res['archived']} van rows.")
+                st.session_state["van_archive_flash"] = van_res["message"]
+            else:
+                st.session_state["van_archive_error"] = van_res["message"]
+            st.rerun()
+
+    st.caption("Full van history, live plus archive, in one file:")
+    if st.button("Prepare full van history file", key="prep_full_van_history"):
+        try:
+            with st.spinner("Gathering live and archived van history..."):
+                st.session_state["full_van_history_csv"] = build_full_van_history_csv()
+        except Exception:
+            st.session_state["full_van_history_csv"] = ""
+            st.error("Could not build the full van-history file right now. Try again in a moment.")
+
+    full_van_csv = st.session_state.get("full_van_history_csv", "")
+    if full_van_csv:
+        st.download_button(
+            "Download FULL Van History (live + archive) as CSV",
+            data=full_van_csv,
+            file_name="bauercrest_full_van_history.csv",
+            mime="text/csv",
+            key="full_van_history_dl",
+        )
+    elif full_van_csv == "":
+        st.caption("Press the button above to build the download.")
+
+    st.markdown("---")
+
+    # -------------------------------------------------
     # STATUS CACHE: recovery tool for the current_status fast-path tab
     # -------------------------------------------------
     section_title("Rebuild Status Cache")
@@ -4051,6 +4302,12 @@ def _main_body():
     # up on the Sign In / Out page.
     if st.session_state.pop("force_home", False):
         st.session_state["main_page_radio"] = "Sign In / Out"
+        # A kiosk that sat idle long enough to trigger this is a kiosk nobody
+        # was actively using, so there is no "group still signing out"
+        # convenience to protect. Reset it to a clean slate: default reason,
+        # and a fresh code-box key in case someone walked away mid-type.
+        st.session_state["signout_reason"] = REASONS[0]
+        st.session_state["signio_nonce"] = st.session_state.get("signio_nonce", 0) + 1
 
     page = st.sidebar.radio(
         "Go to",
