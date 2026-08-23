@@ -159,6 +159,14 @@ APP_CSS = f"""
 #MainMenu, footer {{ visibility: hidden; }}
 header[data-testid="stHeader"] {{ background: transparent; }}
 
+/* Streamlit's default block container reserves ~96px on top and ~160px on
+   the bottom - on a kiosk screen that is the difference between everything
+   fitting and needing to scroll for no real reason. */
+.block-container {{
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+}}
+
 h1, h2, h3, .stApp h1, .stApp h2, .stApp h3 {{
     font-family: 'Archivo', sans-serif;
     color: var(--navy);
@@ -363,8 +371,8 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
 .bc-banner-out .bc-banner-word,
 .bc-banner-out .bc-banner-sub {{ color: {WHITE}; }}
 .bc-banner-out .bc-banner-reason {{
-    background: rgba(255,255,255,0.14);
-    color: {WHITE};
+    background: {WHITE};
+    color: var(--navy);
 }}
 .bc-banner-in {{
     background: {WHITE};
@@ -429,17 +437,21 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
 .bc-vantile-sel {{ box-shadow: 0 0 0 4px rgba(19,41,75,0.25); }}
 
 /* Big confirmation banner. Deliberately loud: a counselor who typed their
-   code must SEE which direction they just went. */
+   code must SEE which direction they just went. Shown for about 5 seconds,
+   then fades on its own so it never becomes a stale, easy-to-ignore leftover
+   message. Same proven fade approach as bcFlashFade above, just held longer
+   since this banner carries more to read. */
 @keyframes bcBigFlash {{
-    0% {{ opacity: 0; transform: translateY(-6px); }}
-    8% {{ opacity: 1; transform: translateY(0); }}
-    100% {{ opacity: 1; }}
+    0%   {{ opacity: 0; transform: translateY(-6px); }}
+    5%   {{ opacity: 1; transform: translateY(0); }}
+    90%  {{ opacity: 1; }}
+    100% {{ opacity: 0; }}
 }}
 .bc-bigflash {{
     border-radius: 14px;
     padding: 1.1rem 1.3rem;
     margin-bottom: 0.9rem;
-    animation: bcBigFlash 0.35s ease forwards;
+    animation: bcBigFlash 6s ease forwards;
 }}
 .bc-bigflash-word {{
     font-family: 'Archivo', sans-serif;
@@ -3229,16 +3241,15 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     )
     st.caption("One box does both. If you are in camp you go out. If you are out you come back in.")
 
-    # Reason only matters when the code turns out to be a sign-out. It sits
-    # above the box and is read only if the person is currently in.
-    # Fixed keys, on purpose. The reason stays on whatever the last person
-    # picked, so a group all signing out for a Night Off does not have to
-    # reset it every single time. Only the code box resets between people.
-    # The banner above now names the pending reason out loud, so a
-    # counselor who forgot to check it still sees it before typing their
-    # code.
-    reason_col, code_col = st.columns([1, 1])
-    with reason_col:
+    # Reason and code live in ONE card now, not two separate boxes of
+    # different heights side by side - that split was exactly what made the
+    # page feel unbalanced, with empty space under the shorter side. Fixed
+    # keys, on purpose, for the reason itself. It stays on whatever the last
+    # person picked, so a group all signing out for a Night Off does not have
+    # to reset it every single time. Only the code box resets between people.
+    # The banner above now names the pending reason out loud, so a counselor
+    # who forgot to check it still sees it before typing their code.
+    with st.container(border=True):
         reason = st.selectbox("Reason (only used if you are signing OUT)", REASONS, key="signout_reason")
         other_reason = ""
         if reason == "Other (type reason)":
@@ -3249,75 +3260,82 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
             # dropdown that visibly still says the wrong thing. This clears it
             # after every action, same as the code box.
             other_reason = st.text_input("Type your reason", key=f"signout_other_reason_{n}")
-    with code_col:
+
         with st.form("signio_form", clear_on_submit=False):
-            code = st.text_input("Your code", type="password", max_chars=4, key=f"signio_code_{n}")
-            submitted = st.form_submit_button("Enter", use_container_width=True)
+            code_col, btn_col = st.columns([2, 1])
+            with code_col:
+                code = st.text_input("Your code", type="password", max_chars=4, key=f"signio_code_{n}")
+            with btn_col:
+                st.markdown("<div style='height:1.6rem'></div>", unsafe_allow_html=True)
+                submitted = st.form_submit_button("Enter", use_container_width=True)
 
     if submitted:
         name, err = resolve_code(code, pin_lookup)
         if err:
             st.error(err)
         else:
-            # Decide direction from a FRESH read, never the cache. This is
-            # a toggle, so a stale read would not just show old data, it
-            # would flip the wrong way and sign someone OUT twice.
-            info = get_status_fresh(name)
-            is_out = bool(info and info["status"] == "OUT")
+            # A network round trip to Sheets sits behind this click, and a
+            # kiosk with no other feedback just looks frozen for that moment.
+            with st.spinner("One moment..."):
+                # Decide direction from a FRESH read, never the cache. This is
+                # a toggle, so a stale read would not just show old data, it
+                # would flip the wrong way and sign someone OUT twice.
+                info = get_status_fresh(name)
+                is_out = bool(info and info["status"] == "OUT")
 
-            if is_out:
-                due = effective_due_back(info.get("reason", ""), info.get("timestamp", ""))
-                mins = minutes_late(due)
+                if is_out:
+                    due = effective_due_back(info.get("reason", ""), info.get("timestamp", ""))
+                    mins = minutes_late(due)
 
-                # THE FORK. If signing them in would be surprising (stale
-                # sign-out, likely a forgotten sign-in), do not guess. Stop
-                # and ask whether they are coming in or leaving again now.
-                # Everyone whose state is fresh skips this entirely.
-                if is_surprising_signin(info):
-                    st.session_state["pending_fork"] = {
-                        "name": name,
-                        "reason": info.get("reason", ""),
-                        "other_reason": info.get("other_reason", ""),
-                        "timestamp": info.get("timestamp", ""),
-                        "mins": mins,
-                    }
+                    # THE FORK. If signing them in would be surprising (stale
+                    # sign-out, likely a forgotten sign-in), do not guess. Stop
+                    # and ask whether they are coming in or leaving again now.
+                    # Everyone whose state is fresh skips this entirely.
+                    if is_surprising_signin(info):
+                        st.session_state["pending_fork"] = {
+                            "name": name,
+                            "reason": info.get("reason", ""),
+                            "other_reason": info.get("other_reason", ""),
+                            "timestamp": info.get("timestamp", ""),
+                            "mins": mins,
+                        }
+                        st.session_state["signio_nonce"] += 1
+                        st.rerun()
+
+                    # Normal, recent sign-in: carry their reason, note lateness.
+                    late_note = f"LATE {mins} min" if mins > 0 else ""
+                    new_id = append_log_row(
+                        name,
+                        info.get("reason", ""),
+                        info.get("other_reason", ""),
+                        action="IN",
+                        status="IN",
+                        late=late_note,
+                    )
+                    set_pending_undo(new_id, f"{name}'s sign-in")
+                    st.session_state["log_flash_kind"] = "in"
+                    st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED IN"
+                    if mins > 0:
+                        notify_phone(
+                            "Bauercrest: Signed IN (LATE)",
+                            f"{name} signed in {mins} min late ({info.get('reason','')})",
+                        )
+                        st.session_state["log_flash"] = f"Welcome back. You were {mins} min late."
+                    else:
+                        st.session_state["log_flash"] = "Welcome back to camp."
                     st.session_state["signio_nonce"] += 1
                     st.rerun()
-
-                # Normal, recent sign-in: carry their reason, note lateness.
-                late_note = f"LATE {mins} min" if mins > 0 else ""
-                new_id = append_log_row(
-                    name,
-                    info.get("reason", ""),
-                    info.get("other_reason", ""),
-                    action="IN",
-                    status="IN",
-                    late=late_note,
-                )
-                set_pending_undo(new_id, f"{name}'s sign-in")
-                st.session_state["log_flash_kind"] = "in"
-                st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED IN"
-                if mins > 0:
-                    notify_phone(
-                        "Bauercrest: Signed IN (LATE)",
-                        f"{name} signed in {mins} min late ({info.get('reason','')})",
-                    )
-                    st.session_state["log_flash"] = f"Welcome back. You were {mins} min late."
+                elif reason == "Other (type reason)" and not other_reason.strip():
+                    st.error("Please type a reason for 'Other'.")
                 else:
-                    st.session_state["log_flash"] = "Welcome back to camp."
-                st.session_state["signio_nonce"] += 1
-                st.rerun()
-            elif reason == "Other (type reason)" and not other_reason.strip():
-                st.error("Please type a reason for 'Other'.")
-            else:
-                due = compute_due_back(reason, datetime.now(TZ))
-                new_id = append_log_row(name, reason, other_reason, action="OUT", status="OUT", due_back=due)
-                set_pending_undo(new_id, f"{name}'s sign-out")
-                st.session_state["log_flash_kind"] = "out"
-                st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED OUT"
-                st.session_state["log_flash"] = f"Reason: {reason if reason != 'Other (type reason)' else other_reason}. Sign back in when you return."
-                st.session_state["signio_nonce"] += 1
-                st.rerun()
+                    due = compute_due_back(reason, datetime.now(TZ))
+                    new_id = append_log_row(name, reason, other_reason, action="OUT", status="OUT", due_back=due)
+                    set_pending_undo(new_id, f"{name}'s sign-out")
+                    st.session_state["log_flash_kind"] = "out"
+                    st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED OUT"
+                    st.session_state["log_flash"] = f"Reason: {reason if reason != 'Other (type reason)' else other_reason}. Sign back in when you return."
+                    st.session_state["signio_nonce"] += 1
+                    st.rerun()
 
     render_stale_fork(reason, other_reason)
 
