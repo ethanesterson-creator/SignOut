@@ -38,6 +38,23 @@ SHEET_LOGS_ARCHIVE = "logs_archive"  # auto-created; permanent history moved out
 ARCHIVE_KEEP_DAYS = 3
 SHEET_SCHEDULE = "schedule"  # auto-created; period start/end times for Period Off deadlines
 
+# Auto-created; one row per person holding their LATEST status only. The logs
+# tab stays the permanent history forever; this tab exists purely so a status
+# check (every sign-in/out toggle, the board, the van flows) reads a handful
+# of rows instead of the entire history. It is a cache, not a second source of
+# truth: it is written every time logs is written, and can be fully rebuilt
+# from logs at any time (see rebuild_current_status_from_logs).
+SHEET_CURRENT_STATUS = "current_status"
+CURRENT_STATUS_HEADERS = ["name", "status", "reason", "other_reason", "timestamp", "due_back", "id"]
+
+# How often the live board silently re-archives old logs on its own, so the
+# live tab never grows unbounded just because nobody remembered to click
+# "Archive Old Logs Now". Deduped on the calendar date, same pattern as the
+# nightly summary, so it runs once a day no matter how many times the board
+# ticks after the hour.
+AUTO_ARCHIVE_HOUR = 3
+AUTO_ARCHIVE_KEY = "auto_archive_date"
+
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # Hard timeout on every Google Sheets call, so a slow Google response can never
@@ -184,6 +201,8 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
 }}
 
 /* ---------- buttons ---------- */
+/* Sized for a touchscreen kiosk: 44px is the standard minimum comfortable tap
+   target, and this is tapped by hand as often as it's clicked with a mouse. */
 .stButton > button, .stFormSubmitButton > button {{
     background: var(--navy);
     color: {WHITE};
@@ -191,13 +210,21 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     border-radius: 8px;
     font-family: 'Archivo', sans-serif;
     font-weight: 700;
+    font-size: 1.02rem;
     letter-spacing: 0.02em;
-    padding: 0.55rem 1.4rem;
-    transition: background 0.15s ease;
+    padding: 0.7rem 1.5rem;
+    min-height: 44px;
+    transition: background 0.12s ease, transform 0.08s ease;
 }}
 .stButton > button:hover, .stFormSubmitButton > button:hover {{
     background: var(--navy-soft);
     color: {WHITE};
+}}
+/* Touchscreens have no hover state, so a tap needs its own visible feedback -
+   otherwise a counselor can't tell whether their tap actually registered. */
+.stButton > button:active, .stFormSubmitButton > button:active {{
+    background: var(--navy-deep);
+    transform: scale(0.97);
 }}
 .stDownloadButton > button {{
     background: {WHITE};
@@ -205,10 +232,17 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     border: 1.5px solid var(--navy);
     border-radius: 8px;
     font-weight: 700;
+    min-height: 44px;
 }}
 
 /* ---------- inputs ---------- */
-.stTextInput input, .stSelectbox [data-baseweb="select"] > div,
+/* The code box is the single most-tapped element on the kiosk, so it gets the
+   same touch-friendly sizing as buttons. */
+.stTextInput input {{
+    min-height: 44px;
+    font-size: 1.05rem;
+}}
+.stSelectbox [data-baseweb="select"] > div,
 .stMultiSelect [data-baseweb="select"] > div {{
     background: {WHITE};
     border-radius: 8px;
@@ -247,6 +281,31 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     font-weight: 800;
     color: var(--navy);
     margin: 0 0 0.7rem 0;
+}}
+
+/* Live-board freshness indicator: a small pulsing dot plus a timestamp, so a
+   counselor glancing at the kiosk can trust the board without wondering when
+   it last checked in. */
+@keyframes bcLiveDotPulse {{
+    0%, 100% {{ opacity: 1; }}
+    50% {{ opacity: 0.35; }}
+}}
+.bc-liveclock {{
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: -0.6rem 0 1rem 0;
+    font-family: 'Public Sans', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--mist);
+}}
+.bc-liveclock-dot {{
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #2E7D32;
+    animation: bcLiveDotPulse 2s ease-in-out infinite;
 }}
 
 /* Big, unmistakable section banners. Counselors read these from a step away,
@@ -648,6 +707,20 @@ def page_title(eyebrow: str, title: str):
 
 def section_title(title: str):
     st.markdown(f"<div class='bc-sectiontitle'>{esc(title)}</div>", unsafe_allow_html=True)
+
+
+def live_clock_note():
+    """Small pulsing 'Live · updated at H:MM:SS' line for a self-refreshing
+    board, so a counselor can trust what they're looking at is current
+    without wondering when it last checked in."""
+    now_str = datetime.now(TZ).strftime("%I:%M:%S %p").lstrip("0")
+    st.markdown(
+        "<div class='bc-liveclock'>"
+        "<div class='bc-liveclock-dot'></div>"
+        f"<div>Live &middot; updated {esc(now_str)}</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def big_banner(word: str, sub: str, kind: str = "out"):
@@ -1469,6 +1542,12 @@ def append_log_row(name: str, reason: str, other_reason: str, action: str, statu
         sheet.append_row(row)
         clear_logs_cache()
         remember_status(name, status, reason, other_reason)
+        # logs is the permanent record; this just keeps the fast-path status
+        # cache in step with it. Never allowed to fail the sign-in/out itself.
+        try:
+            upsert_current_status_rows([row_dict])
+        except Exception:
+            pass
 
         # Phone push after a clean write. Sign-out shows the reason; the typed
         # detail wins when the reason is Other.
@@ -1530,6 +1609,13 @@ def delete_log_row_by_id(row_id: str) -> bool:
 
         sheet.delete_rows(cell.row)
         clear_logs_cache()
+        # This bypasses append_log_row, so current_status was never told about
+        # it. A deleted row can be someone's latest, so rebuild rather than
+        # leave the fast-path cache pointing at a row that no longer exists.
+        try:
+            rebuild_current_status_from_logs()
+        except Exception:
+            pass
         return True
     except Exception:
         return False
@@ -1575,6 +1661,10 @@ def clear_all_logs():
             set_setting(LATE_ALERT_KEY, "")
         except Exception:
             pass
+        try:
+            rebuild_current_status_from_logs()
+        except Exception:
+            pass
     except (APIError, GSpreadException):
         st.error("Could not clear logs in Google Sheets. Please try again later.")
         st.stop()
@@ -1611,6 +1701,10 @@ def delete_logs_by_ids(ids_to_delete):
                 sheet.append_rows(rows)
         clear_logs_cache()
         get_log_headers.clear()
+        try:
+            rebuild_current_status_from_logs()
+        except Exception:
+            pass
     except (APIError, GSpreadException):
         st.error("Could not finish deleting selected log entries. Please try again later.")
         st.stop()
@@ -1702,7 +1796,7 @@ def _row_age_ok_to_archive(ts_value, cutoff):
     return dt < cutoff
 
 
-def plan_archive(live_df: pd.DataFrame, raw_rows: list, header: list, now=None):
+def plan_archive(live_df: pd.DataFrame, raw_rows: list, header: list, now=None, out_names=None):
     """Decide which raw rows stay live and which move to the archive.
 
     The rule, in order of safety:
@@ -1714,12 +1808,18 @@ def plan_archive(live_df: pd.DataFrame, raw_rows: list, header: list, now=None):
 
     Works on the RAW cell rows so the archived record is byte-for-byte what was
     written, never a reformatted copy. Returns (keep_rows, archive_rows).
+
+    out_names lets the caller pass in who is currently OUT from the fast
+    current_status cache instead of scanning the full history here. Pass None
+    to fall back to computing it directly from live_df (the original, slower
+    but fully self-contained method) if that cache is ever unavailable.
     """
     now = now or datetime.now(TZ)
     cutoff = now - timedelta(days=ARCHIVE_KEEP_DAYS)
 
-    # Names whose latest row is OUT, judged on the real sheet data.
-    out_names = set(get_currently_out(live_df)["name"].astype(str).str.strip().tolist())
+    if out_names is None:
+        # Names whose latest row is OUT, judged on the real sheet data.
+        out_names = set(get_currently_out(live_df)["name"].astype(str).str.strip().tolist())
 
     try:
         name_i = header.index("name")
@@ -1782,7 +1882,20 @@ def archive_old_logs():
         return result
 
     live_df = read_sheet_df(live)
-    keep_rows, archive_rows = plan_archive(live_df, raw_rows, header)
+
+    # Prefer the fast current_status cache for "who is out"; fall back to the
+    # slower full-history scan (out_names=None) if it is not available for any
+    # reason. Archiving safety must never depend on this cache being correct.
+    try:
+        clear_current_status_cache()
+        fast_out_names = set(
+            get_currently_out(load_current_status_df_cached())["name"]
+            .astype(str).str.strip().tolist()
+        )
+    except Exception:
+        fast_out_names = None
+
+    keep_rows, archive_rows = plan_archive(live_df, raw_rows, header, out_names=fast_out_names)
     result["kept"] = len(keep_rows)
 
     if not archive_rows:
@@ -1841,6 +1954,35 @@ def archive_old_logs():
     return result
 
 
+def check_auto_archive():
+    """Run the archive once a day on its own, so the live tab never grows
+    unbounded just because nobody remembered to click the admin button.
+
+    Deduped on the calendar date in the settings tab, exactly like the
+    nightly summary, so it fires once per day no matter how many kiosks tick
+    past the hour. Safe to call from any board tick; never breaks the board.
+    """
+    try:
+        now = datetime.now(TZ)
+        if now.hour < AUTO_ARCHIVE_HOUR:
+            return
+
+        today = now.strftime("%Y-%m-%d")
+        try:
+            get_setting.clear()
+        except Exception:
+            pass
+        if get_setting(AUTO_ARCHIVE_KEY).strip() == today:
+            return  # already ran today
+
+        # Claim today FIRST, so two kiosks hitting the hour together do not
+        # both kick off an archive run at once.
+        set_setting(AUTO_ARCHIVE_KEY, today)
+        archive_old_logs()
+    except Exception:
+        pass
+
+
 def build_full_history_csv() -> str:
     """Live + archive, combined and sorted oldest to newest, as CSV text.
 
@@ -1866,6 +2008,141 @@ def build_full_history_csv() -> str:
         full["_ts"] = pd.to_datetime(full["timestamp"], errors="coerce")
         full = full.sort_values("_ts", na_position="first").drop(columns=["_ts"])
     return full.to_csv(index=False)
+
+
+# =================================================
+# CURRENT STATUS (fast path: one row per person, not the whole history)
+# =================================================
+def get_current_status_sheet():
+    """Get the current_status tab, creating and backfilling it if missing.
+
+    Backfilling on creation matters: without it, the tab would start empty
+    even though real people may already be OUT in the live logs history, and
+    every fast-path reader below would wrongly show them as IN the moment
+    this feature ships.
+    """
+    try:
+        return get_worksheet(SHEET_CURRENT_STATUS)
+    except WorksheetNotFound:
+        ss = get_spreadsheet()
+        sheet = ss.add_worksheet(
+            title=SHEET_CURRENT_STATUS, rows=200, cols=len(CURRENT_STATUS_HEADERS)
+        )
+        sheet.update("A1", [CURRENT_STATUS_HEADERS])
+        try:
+            get_worksheet.clear()
+        except Exception:
+            pass
+        try:
+            rebuild_current_status_from_logs(sheet)
+        except Exception:
+            pass
+        return sheet
+
+
+@st.cache_data(ttl=5)
+def load_current_status_df_cached():
+    try:
+        sheet = get_current_status_sheet()
+        df = read_sheet_df(sheet)
+    except Exception:
+        return pd.DataFrame(columns=CURRENT_STATUS_HEADERS)
+
+    for c in CURRENT_STATUS_HEADERS:
+        if c not in df.columns:
+            df[c] = ""
+    df["name"] = df["name"].astype(str).str.strip()
+    df["status"] = df["status"].astype(str).str.strip().str.upper()
+    df["reason"] = df["reason"].astype(str).str.strip()
+    df["other_reason"] = df["other_reason"].astype(str)
+    return df
+
+
+def clear_current_status_cache():
+    load_current_status_df_cached.clear()
+
+
+def rebuild_current_status_from_logs(sheet=None):
+    """Recompute current_status from scratch by scanning the full logs
+    history. This is the safety net: current_status is only ever a cache, and
+    this function is the proof it can always be thrown away and regenerated
+    with no data loss, since logs remains the one and only permanent record.
+
+    Also doubles as the one-time backfill when the tab is first created.
+    """
+    sheet = sheet or get_current_status_sheet()
+    status_map = get_latest_status_map(load_logs_df_cached())
+    rows = [CURRENT_STATUS_HEADERS]
+    for name, info in status_map.items():
+        if not name:
+            continue
+        rows.append([
+            name,
+            info.get("status", ""),
+            info.get("reason", ""),
+            info.get("other_reason", ""),
+            info.get("timestamp", ""),
+            info.get("due_back", ""),
+            info.get("id", ""),
+        ])
+    sheet.clear()
+    sheet.update("A1", rows)
+    clear_current_status_cache()
+
+
+def upsert_current_status_rows(rows: list) -> bool:
+    """Write each row's person into current_status in place: update their one
+    row if they already have one, append a new row if they don't.
+
+    Reads the whole current_status tab first, but that tab only ever has one
+    row per staff member (tens of rows), not the full append-only history
+    (which only grows), so this stays cheap all season regardless of how much
+    history has piled up in logs. Batches all updates into one API call and
+    all new rows into one more, so a full van (many people at once) still
+    costs at most two calls here, not one per person.
+
+    Never raises: current_status is a cache, so a failure here must not break
+    the actual sign-in/out, which already succeeded by the time this runs.
+    """
+    if not rows:
+        return True
+    try:
+        sheet = get_current_status_sheet()
+        existing = sheet.get_all_values()
+        header = existing[0] if existing else list(CURRENT_STATUS_HEADERS)
+        body = existing[1:] if len(existing) > 1 else []
+        name_i = header.index("name") if "name" in header else 0
+
+        row_num_by_name = {}
+        for i, r in enumerate(body):
+            if len(r) > name_i and str(r[name_i]).strip():
+                row_num_by_name[str(r[name_i]).strip()] = i + 2  # 1 header + 1-index
+
+        updates = []
+        appends = []
+        last_col = chr(ord("A") + len(header) - 1)
+        for rd in rows:
+            name = str(rd.get("name", "")).strip()
+            if not name:
+                continue
+            values = [rd.get(h, "") for h in header]
+            rn = row_num_by_name.get(name)
+            if rn:
+                updates.append({"range": f"A{rn}:{last_col}{rn}", "values": [values]})
+            else:
+                appends.append(values)
+                # Claim this name now so a second occurrence later in the same
+                # batch updates it instead of appending a duplicate row.
+                row_num_by_name[name] = -1
+
+        if updates:
+            sheet.batch_update(updates)
+        if appends:
+            sheet.append_rows(appends)
+        clear_current_status_cache()
+        return True
+    except Exception:
+        return False
 
 
 # =================================================
@@ -1971,20 +2248,21 @@ def get_latest_status_map(df: pd.DataFrame) -> dict:
 def get_status_fresh(name: str):
     """Read this person's TRUE current status straight from the sheet.
 
-    The cached logs can be up to 10 seconds old, and Google Sheets itself can
-    lag a moment behind a write. The sign in/out box is a TOGGLE, so a stale
-    read does not just show old data, it picks the WRONG DIRECTION: it can
-    sign someone OUT a second time when they meant to sign IN, leaving them
-    stuck on the Who's Out board.
+    The sign in/out box is a TOGGLE, so a stale read does not just show old
+    data, it picks the WRONG DIRECTION: it can sign someone OUT a second time
+    when they meant to sign IN, leaving them stuck on the Who's Out board.
 
-    So before deciding direction, we drop the cache and re-read. Returns a
-    dict with status/reason/other_reason, or None if the person has no rows.
+    Reads current_status (a handful of rows) instead of the full logs history,
+    so this stays fast no matter how big the season's history has grown. Drops
+    the cache first since Google Sheets itself can lag a moment behind a
+    write. Returns a dict with status/reason/other_reason, or None if the
+    person has no row yet.
     """
     try:
-        clear_logs_cache()
+        clear_current_status_cache()
     except Exception:
         pass
-    df = merge_recent_writes(load_logs_df_cached())
+    df = merge_recent_writes(load_current_status_df_cached())
     return get_latest_status_map(df).get((name or "").strip())
 
 
@@ -1995,13 +2273,14 @@ def get_status_map_fresh() -> dict:
     who is currently IN. Deciding that from a cache up to 10 seconds old can
     sign out someone who ALREADY signed themselves out seconds earlier, giving
     them two OUT rows and stranding them on the board. Same failure mode that
-    hit the toggle. So these reads are always fresh.
+    hit the toggle. So these reads are always fresh, and read current_status
+    instead of the full logs history for the same speed reason as above.
     """
     try:
-        clear_logs_cache()
+        clear_current_status_cache()
     except Exception:
         pass
-    return get_latest_status_map(merge_recent_writes(load_logs_df_cached()))
+    return get_latest_status_map(merge_recent_writes(load_current_status_df_cached()))
 
 
 def append_log_rows_batch(rows: list) -> bool:
@@ -2021,6 +2300,10 @@ def append_log_rows_batch(rows: list) -> bool:
         clear_logs_cache()
         for rd in rows:
             remember_status(rd.get("name", ""), rd.get("status", ""), rd.get("reason", ""), rd.get("other_reason", ""))
+        try:
+            upsert_current_status_rows(rows)
+        except Exception:
+            pass
         return True
     except Exception:
         return False
@@ -2479,7 +2762,7 @@ def whos_out_strip():
     the code box. Forgot-zone people are shown separately, like the board.
     """
     try:
-        df_out = get_currently_out(merge_recent_writes(load_logs_df_cached()))
+        df_out = get_currently_out(merge_recent_writes(load_current_status_df_cached()))
     except Exception:
         return
 
@@ -2677,13 +2960,15 @@ def page_whos_out():
 
     @st.fragment(run_every=BOARD_REFRESH_SECONDS)
     def live_board():
-        df_logs = merge_recent_writes(load_logs_df_cached())
-        df_out = get_currently_out(df_logs)
+        live_clock_note()
+        df_status = merge_recent_writes(load_current_status_df_cached())
+        df_out = get_currently_out(df_status)
 
         # Alert on anyone who just crossed their deadline. Runs on the board's
         # one-minute tick, deduped in the sheet so it fires only once.
         check_late_and_alert(df_out)
         check_nightly_summary(df_out)
+        check_auto_archive()
 
         # Split the board. Someone hours past their deadline almost certainly
         # forgot to sign in, and a huge minute count buries the person who is
@@ -3076,7 +3361,7 @@ def page_admin_history(staff_pins: dict):
     section_title("Sign Someone Back In")
     st.caption("For when a staff member forgot to sign in. Pick the person, type your admin code, and sign them in.")
 
-    df_out_now = get_currently_out(load_logs_df_cached())
+    df_out_now = get_currently_out(load_current_status_df_cached())
     out_names_now = sorted(df_out_now["name"].tolist())
 
     if not out_names_now:
@@ -3189,8 +3474,9 @@ def page_admin_history(staff_pins: dict):
     st.caption(
         "Moves old, closed-out sign-outs to a separate logs_archive tab so the "
         "app stays fast. Everyone still signed out is kept, plus the last "
-        f"{ARCHIVE_KEEP_DAYS} days. Nothing is ever deleted, only moved. Run it "
-        "when the board is calm."
+        f"{ARCHIVE_KEEP_DAYS} days. Nothing is ever deleted, only moved. This "
+        f"now also runs automatically every night around {AUTO_ARCHIVE_HOUR}:00 "
+        "AM — use the button below only if you want it to run right now."
     )
 
     arch_flash = st.session_state.pop("archive_flash", "")
@@ -3247,6 +3533,29 @@ def page_admin_history(staff_pins: dict):
         )
     elif full_csv == "":
         st.caption("Press the button above to build the download.")
+
+    st.markdown("---")
+
+    # -------------------------------------------------
+    # STATUS CACHE: recovery tool for the current_status fast-path tab
+    # -------------------------------------------------
+    section_title("Rebuild Status Cache")
+    st.caption(
+        "The board and sign-in box read a small current_status tab instead of "
+        "the full history, to stay fast. It updates itself on every sign-in/out "
+        "automatically. Use this only if something looks wrong on the board "
+        "after hand-editing rows directly in the logs sheet — it recomputes "
+        "current_status from scratch by scanning the full history. Nothing in "
+        "logs is ever touched by this."
+    )
+    if st.button("Rebuild Status Cache From History", key="rebuild_status_cache_btn"):
+        try:
+            with st.spinner("Recomputing current status from the full log history..."):
+                clear_logs_cache()
+                rebuild_current_status_from_logs()
+            st.success("Status cache rebuilt from history.")
+        except Exception:
+            st.error("Could not rebuild the status cache right now. Please try again.")
 
     st.markdown("---")
 
@@ -3387,6 +3696,7 @@ def ensure_headers_once():
         ensure_logs_header(get_worksheet(SHEET_LOGS))
         ensure_vans_header(get_vans_sheet())
         get_schedule_sheet()  # creates the schedule tab with camp defaults if missing
+        get_current_status_sheet()  # creates + backfills current_status if missing
         get_log_headers.clear()
         get_van_headers.clear()
     except Exception:
@@ -3470,9 +3780,10 @@ def _main_body():
         @st.fragment(run_every=BOARD_REFRESH_SECONDS)
         def heartbeat():
             try:
-                out_now = get_currently_out(merge_recent_writes(load_logs_df_cached()))
+                out_now = get_currently_out(merge_recent_writes(load_current_status_df_cached()))
                 check_late_and_alert(out_now)
                 check_nightly_summary(out_now)
+                check_auto_archive()
             except Exception:
                 pass
 
