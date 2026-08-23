@@ -790,7 +790,11 @@ def get_gspread_client():
 @st.cache_resource
 def get_spreadsheet():
     client = get_gspread_client()
-    return client.open_by_key(SPREADSHEET_ID)
+    # secrets can override which sheet to open, so a local/test run can point
+    # at a copy of the spreadsheet without ever touching the production ID
+    # baked into the code above.
+    sheet_id = st.secrets.get("spreadsheet_id", SPREADSHEET_ID)
+    return client.open_by_key(sheet_id)
 
 
 @st.cache_resource
@@ -1115,8 +1119,10 @@ def check_late_and_alert(df_out: pd.DataFrame):
 
 # Nightly "who is still out" summary to your phone, so a forget gets caught the
 # same night instead of rotting into a giant late stamp days later. Fires once
-# per night at this hour (24-hour clock). Change this one number to move it.
-NIGHTLY_SUMMARY_HOUR = 24
+# per night at this hour (24-hour clock, 0 = midnight). Change this one number
+# to move it. NOTE: hour must be 0-23; datetime.hour never reaches 24, so a
+# value of 24 here made this check always true and the summary never sent.
+NIGHTLY_SUMMARY_HOUR = 0
 NIGHTLY_SUMMARY_KEY = "nightly_summary_date"
 
 
@@ -2591,7 +2597,7 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
         other_reason = st.text_input("Type your reason", key="signout_other_reason")
 
     with st.form("signio_form", clear_on_submit=False):
-        code = st.text_input("Your code", type="password", max_chars=6, key=f"signio_code_{n}")
+        code = st.text_input("Your code", type="password", max_chars=4, key=f"signio_code_{n}")
         submitted = st.form_submit_button("Enter", use_container_width=True)
 
     if submitted:
@@ -3078,7 +3084,7 @@ def page_admin_history(staff_pins: dict):
     else:
         with st.form("admin_signin_form", clear_on_submit=True):
             who = st.selectbox("Who is signed out?", out_names_now)
-            admin_code = st.text_input("Your admin code", type="password", max_chars=6)
+            admin_code = st.text_input("Your admin code", type="password", max_chars=4)
             do_signin = st.form_submit_button("Sign This Person In")
 
         if do_signin:
@@ -3120,7 +3126,7 @@ def page_admin_history(staff_pins: dict):
     else:
         with st.form("admin_van_signin_form", clear_on_submit=True):
             which_van = st.selectbox("Which van is out?", out_vans_now, format_func=van_label)
-            van_admin_code = st.text_input("Your admin code", type="password", max_chars=6, key="admin_van_code")
+            van_admin_code = st.text_input("Your admin code", type="password", max_chars=4, key="admin_van_code")
             do_van_signin = st.form_submit_button("Sign This Van In")
 
         if do_van_signin:
@@ -3196,7 +3202,7 @@ def page_admin_history(staff_pins: dict):
 
     with st.form("archive_form", clear_on_submit=True):
         st.caption("Type your admin code and confirm to archive.")
-        arch_code = st.text_input("Your admin code", type="password", max_chars=6, key="archive_admin_code")
+        arch_code = st.text_input("Your admin code", type="password", max_chars=4, key="archive_admin_code")
         arch_confirm = st.checkbox("I understand old closed-out rows will be moved to the archive tab.")
         arch_go = st.form_submit_button("Archive Old Logs Now")
 
