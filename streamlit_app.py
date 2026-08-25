@@ -4226,13 +4226,27 @@ def page_admin_history(staff_pins: dict):
         # large the live tab is. The complete record is always available through
         # the full-history download and the archive tab.
         HISTORY_TABLE_LIMIT = 200
-        total_rows = len(df_logs)
-        df_display = df_logs.copy()
+
+        # Filtering by name BEFORE the row cap, not after, is the whole point:
+        # otherwise looking up one counselor's history means scrolling through
+        # everyone else's most recent 200 rows hoping theirs are in there, or
+        # downloading the CSV and searching it by hand.
+        name_options = ["All"] + sorted(
+            n for n in df_logs["name"].astype(str).str.strip().unique() if n
+        )
+        name_filter = st.selectbox("Filter by name", name_options, key="admin_history_name_filter")
+        df_scope = df_logs if name_filter == "All" else df_logs[df_logs["name"] == name_filter]
+
+        total_rows = len(df_scope)
+        df_display = df_scope.copy()
         df_display["_ts"] = pd.to_datetime(df_display["timestamp"], errors="coerce", format="mixed")
         df_display = df_display.sort_values("_ts", na_position="first").drop(columns=["_ts"])
         if total_rows > HISTORY_TABLE_LIMIT:
             df_display = df_display.tail(HISTORY_TABLE_LIMIT)
-            st.caption(f"Showing the most recent {HISTORY_TABLE_LIMIT} of {total_rows} live rows. Use the downloads for the full record.")
+            scope_label = "live" if name_filter == "All" else f"live {name_filter}"
+            st.caption(f"Showing the most recent {HISTORY_TABLE_LIMIT} of {total_rows} {scope_label} rows. Use the downloads for the full record.")
+        elif name_filter != "All":
+            st.caption(f"{total_rows} row(s) for {name_filter}.")
         df_display["timestamp_str"] = df_display["timestamp"].apply(format_time)
         df_display = df_display.rename(columns={
             "id": "ID",
