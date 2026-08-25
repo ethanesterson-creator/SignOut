@@ -2421,6 +2421,7 @@ def upsert_current_status_rows(rows: list) -> bool:
 
         updates = []
         appends = []
+        append_index_by_name = {}
         last_col = chr(ord("A") + len(header) - 1)
         for rd in rows:
             name = str(rd.get("name", "")).strip()
@@ -2430,11 +2431,16 @@ def upsert_current_status_rows(rows: list) -> bool:
             rn = row_num_by_name.get(name)
             if rn:
                 updates.append({"range": f"A{rn}:{last_col}{rn}", "values": [values]})
+            elif name in append_index_by_name:
+                # A second occurrence of this name earlier queued a brand-new
+                # row rather than an update (they have no existing row yet).
+                # Overwrite that queued row in place so the batch still ends
+                # with exactly one row per name instead of appending a
+                # duplicate that then desyncs current_status from logs.
+                appends[append_index_by_name[name]] = values
             else:
                 appends.append(values)
-                # Claim this name now so a second occurrence later in the same
-                # batch updates it instead of appending a duplicate row.
-                row_num_by_name[name] = -1
+                append_index_by_name[name] = len(appends) - 1
 
         if updates:
             sheet.batch_update(updates)
