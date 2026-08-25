@@ -2421,6 +2421,7 @@ def upsert_current_status_rows(rows: list) -> bool:
 
         updates = []
         appends = []
+        append_index_by_name = {}
         last_col = chr(ord("A") + len(header) - 1)
         for rd in rows:
             name = str(rd.get("name", "")).strip()
@@ -2430,11 +2431,16 @@ def upsert_current_status_rows(rows: list) -> bool:
             rn = row_num_by_name.get(name)
             if rn:
                 updates.append({"range": f"A{rn}:{last_col}{rn}", "values": [values]})
+            elif name in append_index_by_name:
+                # A second occurrence of this name earlier queued a brand-new
+                # row rather than an update (they have no existing row yet).
+                # Overwrite that queued row in place so the batch still ends
+                # with exactly one row per name instead of appending a
+                # duplicate that then desyncs current_status from logs.
+                appends[append_index_by_name[name]] = values
             else:
                 appends.append(values)
-                # Claim this name now so a second occurrence later in the same
-                # batch updates it instead of appending a duplicate row.
-                row_num_by_name[name] = -1
+                append_index_by_name[name] = len(appends) - 1
 
         if updates:
             sheet.batch_update(updates)
@@ -2976,6 +2982,15 @@ def render_out_cards(df_out: pd.DataFrame, forgot_zone: bool = False):
 
         details_html = f"<div class='bc-meta'>{details}</div>" if details else ""
 
+        # Show the live deadline (Period/Night/Day Off) so staff can see who
+        # is due soon, not just who is already late. Same recompute-from-reason
+        # source as the lateness check above, so it never drifts from it.
+        due = effective_due_back(row.get("reason", ""), row.get("timestamp", ""))
+        due_html = (
+            f"<div class='bc-meta'>Due back <span class='bc-time'>{esc(format_board_time(due))}</span></div>"
+            if due and not forgot_zone else ""
+        )
+
         if forgot_zone:
             # A count in the thousands tells you nothing. Say what it means.
             late_chip = "<div class='bc-chip bc-chip-forgot'>NO SIGN-IN</div>"
@@ -2994,6 +3009,7 @@ def render_out_cards(df_out: pd.DataFrame, forgot_zone: bool = False):
             f"<div class='bc-name'>{name}</div>"
             f"{details_html}"
             f"<div class='bc-meta'>Signed out at <span class='bc-time'>{when}</span></div>"
+            f"{due_html}"
             f"</div>"
         )
     st.markdown(f"<div class='bc-grid'>{''.join(cards)}</div>", unsafe_allow_html=True)
