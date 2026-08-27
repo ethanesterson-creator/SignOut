@@ -1400,8 +1400,19 @@ def read_sheet_df(sheet) -> pd.DataFrame:
 # =================================================
 @st.cache_data(ttl=30)
 def load_staff_df_cached():
-    sheet = get_worksheet(SHEET_STAFF)
-    df = read_sheet_df(sheet)
+    # staff_pins loads on EVERY page render, unconditionally, including the
+    # Sign In/Out page itself - so a bare Sheets hiccup here (the exact
+    # transient failure SHEETS_TIMEOUT_SECONDS exists to survive) must not
+    # propagate as an uncaught exception. Uncaught, it would hit main()'s
+    # top-level catch-all and replace the WHOLE kiosk with the "reconnecting"
+    # screen, not just this one board, until someone manually reloads. Falling
+    # back to an empty frame here instead lets the rest of the page degrade
+    # the same way every other Sheets read in this file already does.
+    try:
+        sheet = get_worksheet(SHEET_STAFF)
+        df = read_sheet_df(sheet)
+    except Exception:
+        df = pd.DataFrame(columns=["name", "pin", "active", "admin"])
     for c in ["name", "pin", "active", "admin"]:
         if c not in df.columns:
             df[c] = ""
@@ -1423,8 +1434,14 @@ def load_staff_df_cached():
 
 @st.cache_data(ttl=30)
 def load_drivers_df_cached():
-    sheet = get_worksheet(SHEET_DRIVERS)
-    df = read_sheet_df(sheet)
+    # Same reasoning as load_staff_df_cached above: never let a Sheets hiccup
+    # here take down the whole kiosk instead of just leaving the driver list
+    # empty for this render.
+    try:
+        sheet = get_worksheet(SHEET_DRIVERS)
+        df = read_sheet_df(sheet)
+    except Exception:
+        df = pd.DataFrame(columns=["name", "passed_test"])
     for c in ["name", "passed_test"]:
         if c not in df.columns:
             df[c] = ""
@@ -2886,8 +2903,15 @@ def ensure_vans_header(sheet):
 
 @st.cache_data(ttl=10)
 def load_vans_df_cached():
-    sheet = get_vans_sheet()
-    return read_sheet_df(sheet)
+    # Same reasoning as load_staff_df_cached: an uncaught Sheets error here
+    # would take down the whole kiosk via main()'s catch-all instead of just
+    # leaving the Vans board empty. Every caller already treats an empty
+    # frame as "no van data yet", so this is a safe, silent fallback.
+    try:
+        sheet = get_vans_sheet()
+        return read_sheet_df(sheet)
+    except Exception:
+        return pd.DataFrame()
 
 
 def clear_vans_cache():
