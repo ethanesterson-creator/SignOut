@@ -3190,8 +3190,10 @@ def whos_out_strip():
         label = esc(it["name"])
         detail = esc(it["other"]) if it["other"] else esc(it["reason"])
         cls = "bc-chip-strip bc-chip-strip-forgot" if forgot_zone else "bc-chip-strip"
+        # detail is already escaped above; re-escaping tail here would turn
+        # e.g. an apostrophe in a name into a literal "&amp;#39;" on screen.
         tail = " · NO SIGN-IN" if forgot_zone else (f" · {detail}" if detail else "")
-        return f"<span class='{cls}'>{label}{esc(tail)}</span>"
+        return f"<span class='{cls}'>{label}{tail}</span>"
 
     if active:
         st.markdown("<div class='bc-strip'>" + "".join(chip(i) for i in active) + "</div>", unsafe_allow_html=True)
@@ -4311,9 +4313,24 @@ def page_admin_history(staff_pins: dict):
         dfv = df_vans.copy()
         if "timestamp" in dfv.columns:
             dfv["timestamp"] = pd.to_datetime(dfv["timestamp"], errors="coerce")
+            dfv = dfv.sort_values("timestamp", na_position="first")
             dfv["timestamp_str"] = dfv["timestamp"].apply(format_time)
         else:
             dfv["timestamp_str"] = ""
+
+        # Same row cap as Full Log History above: a season of van trips can
+        # grow into the thousands, and rendering all of them on every admin
+        # page load (this table has no cache of its own) makes the page
+        # noticeably slower to open with no benefit, since the full record is
+        # always available through the download button below.
+        VAN_HISTORY_TABLE_LIMIT = 200
+        total_van_rows = len(dfv)
+        if total_van_rows > VAN_HISTORY_TABLE_LIMIT:
+            dfv = dfv.tail(VAN_HISTORY_TABLE_LIMIT)
+            st.caption(
+                f"Showing the most recent {VAN_HISTORY_TABLE_LIMIT} of {total_van_rows} live rows. "
+                "Use the full-history download above for the complete record."
+            )
 
         dfv = dfv.rename(columns={
             "id": "ID",
