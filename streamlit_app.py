@@ -2977,10 +2977,19 @@ def render_out_cards(df_out: pd.DataFrame, forgot_zone: bool = False):
 
         # Late = past their due-back time and still not signed in. Recomputed
         # from the current reason, so a reason edit in the sheet corrects it.
-        mins = row_minutes_late(row)
+        due = effective_due_back(row.get("reason", ""), row.get("timestamp", ""))
+        mins = minutes_late(due)
         is_late = mins > 0
 
         details_html = f"<div class='bc-meta'>{details}</div>" if details else ""
+        # Only reasons with a real deadline (Period/Day/Night Off) carry a due
+        # time; Van and Other stay silent here rather than show a blank "Due
+        # back by" line. Once late, the LATE chip already says it, so this
+        # line is only useful before the deadline hits.
+        due_html = (
+            f"<div class='bc-meta'>Due back by <span class='bc-time'>{esc(format_board_time(due))}</span></div>"
+            if due is not None and not is_late and not forgot_zone else ""
+        )
 
         if forgot_zone:
             # A count in the thousands tells you nothing. Say what it means.
@@ -3000,6 +3009,7 @@ def render_out_cards(df_out: pd.DataFrame, forgot_zone: bool = False):
             f"<div class='bc-name'>{name}</div>"
             f"{details_html}"
             f"<div class='bc-meta'>Signed out at <span class='bc-time'>{when}</span></div>"
+            f"{due_html}"
             f"</div>"
         )
     st.markdown(f"<div class='bc-grid'>{''.join(cards)}</div>", unsafe_allow_html=True)
@@ -4021,9 +4031,7 @@ def page_admin_history(staff_pins: dict):
                 last_purpose = ""
                 last_other_purpose = ""
                 try:
-                    tmp = vans_now.copy()
-                    tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
-                    tmp = tmp.sort_values("timestamp", na_position="last")
+                    tmp = _sorted_by_recency(vans_now.copy())
                     vr = tmp[tmp["van"] == which_van]
                     if not vr.empty:
                         outr = vr[vr["status"].astype(str).str.upper() == "OUT"]
