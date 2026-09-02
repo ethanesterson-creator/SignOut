@@ -1811,36 +1811,49 @@ def clear_all_logs():
 
 
 def delete_logs_by_ids(ids_to_delete):
+    """Delete specific log rows by id, in place.
+
+    Finds and deletes exactly the matched rows straight on the live sheet,
+    highest row number first so an earlier delete never shifts a later row
+    out from under it - the same approach delete_log_row_by_id already uses
+    for a single row. The previous version rewrote the WHOLE tab instead:
+    sheet.clear() first, then reinsert everything from load_logs_df_cached()
+    (up to 10s stale). That meant a sign-in/out written in the last few
+    seconds was silently missing from the rewrite and permanently lost, and
+    if append_rows failed after the clear() had already succeeded (a network
+    blip mid-write), EVERY row in the tab was gone, not just the ones picked
+    for deletion. Reading ids fresh off the sheet and deleting only those
+    rows removes both failure modes: nothing is ever cleared wholesale, and
+    the id lookup can't miss a row written moments ago.
+    """
+    ids_to_delete = {str(i).strip() for i in ids_to_delete if str(i).strip()}
+    if not ids_to_delete:
+        return
+
     try:
         sheet = get_worksheet(SHEET_LOGS)
-        df = load_logs_df_cached()
+        all_vals = sheet.get_all_values()
     except (APIError, GSpreadException):
         st.error("Could not update logs in Google Sheets. Please try again later.")
         st.stop()
 
-    if df.empty:
+    if not all_vals:
         return
 
-    df_keep = df[~df["id"].isin(ids_to_delete)].copy()
+    header = all_vals[0]
+    id_col = header.index("id") if "id" in header else 0
+
+    rows_to_delete = [
+        i + 2 for i, row in enumerate(all_vals[1:])
+        if id_col < len(row) and row[id_col].strip() in ids_to_delete
+    ]
+    if not rows_to_delete:
+        return
 
     try:
-        # Rewrite using the sheet's ACTUAL header order, not a hardcoded list.
-        # Forcing a fixed column list would drop any extra column and could
-        # shift data into the wrong columns.
-        headers = get_log_headers()
-        sheet.clear()
-        sheet.insert_row(headers, 1)
-        if not df_keep.empty:
-            df_out = df_keep.copy()
-            df_out["timestamp"] = df_out["timestamp"].astype(str)
-            for h in headers:
-                if h not in df_out.columns:
-                    df_out[h] = ""
-            rows = df_out[headers].astype(str).values.tolist()
-            if rows:
-                sheet.append_rows(rows)
+        for row_num in sorted(rows_to_delete, reverse=True):
+            sheet.delete_rows(row_num)
         clear_logs_cache()
-        get_log_headers.clear()
         try:
             rebuild_current_status_from_logs()
         except Exception:
@@ -3556,9 +3569,6 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
     if flash:
         big_flash(flash, "in")
 
-    vans_df = load_vans_df_cached()
-    status_map = compute_van_status(vans_df)
-
     # A van picked by someone who then walked away must not still be selected
     # when the next counselor arrives. The kiosk is one shared session, so the
     # selection expires on its own.
@@ -3575,7 +3585,21 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
         selected = ""
 
     st.caption("Tap the van you are dealing with. The app knows if you are taking it out or bringing it back.")
-    render_van_tiles(status_map, selected)
+
+    # The sidebar claims this board "refreshes on its own every minute", same
+    # as Who's Out, but until now nothing here actually did that - this whole
+    # page only ever redrew on a click. A van checked out or back in from a
+    # DIFFERENT kiosk sat wrong on this one until someone happened to touch
+    # it. Only the tiles get their own tick; the pick buttons and the
+    # checkout/checkin forms below stay outside this fragment; a rerun from
+    # inside a fragment only reruns that fragment, and the form draw for a
+    # tapped van lives further down in this same function, so it still needs
+    # the normal full rerun a button click already triggers.
+    @st.fragment(run_every=BOARD_REFRESH_SECONDS)
+    def van_tiles_live():
+        render_van_tiles(compute_van_status(load_vans_df_cached()), selected)
+
+    van_tiles_live()
 
     # The tiles above are the display. These buttons sit directly under them
     # and are what actually gets tapped, one per van, in the same order.
@@ -3593,6 +3617,8 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
         crest_footer()
         return
 
+    vans_df = load_vans_df_cached()
+    status_map = compute_van_status(vans_df)
     is_out = status_map.get(selected, {}).get("status") == "OUT"
     st.divider()
 
