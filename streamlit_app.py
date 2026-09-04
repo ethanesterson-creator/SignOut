@@ -3209,8 +3209,10 @@ def whos_out_strip():
         label = esc(it["name"])
         detail = esc(it["other"]) if it["other"] else esc(it["reason"])
         cls = "bc-chip-strip bc-chip-strip-forgot" if forgot_zone else "bc-chip-strip"
+        # detail is already escaped above; re-escaping tail here would turn
+        # e.g. an apostrophe in a name into a literal "&amp;#39;" on screen.
         tail = " · NO SIGN-IN" if forgot_zone else (f" · {detail}" if detail else "")
-        return f"<span class='{cls}'>{label}{esc(tail)}</span>"
+        return f"<span class='{cls}'>{label}{tail}</span>"
 
     if active:
         st.markdown("<div class='bc-strip'>" + "".join(chip(i) for i in active) + "</div>", unsafe_allow_html=True)
@@ -4077,9 +4079,7 @@ def page_admin_history(staff_pins: dict):
                 last_purpose = ""
                 last_other_purpose = ""
                 try:
-                    tmp = vans_now.copy()
-                    tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
-                    tmp = tmp.sort_values("timestamp", na_position="last")
+                    tmp = _sorted_by_recency(vans_now.copy())
                     vr = tmp[tmp["van"] == which_van]
                     if not vr.empty:
                         outr = vr[vr["status"].astype(str).str.upper() == "OUT"]
