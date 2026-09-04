@@ -3006,6 +3006,22 @@ def render_out_cards(df_out: pd.DataFrame, forgot_zone: bool = False):
 
         details_html = f"<div class='bc-meta'>{details}</div>" if details else ""
 
+        # Show WHEN they're expected back, not just whether they're late. The
+        # deadline was already being computed for the late chip; the board just
+        # never displayed it, so a counselor watching the board could see
+        # "LATE 12 MIN" but never see a due-back time before that happened.
+        # Skip it in the forgot zone: those cards already say "NO SIGN-IN" and
+        # a deadline hours or days in the past would only be noise there.
+        due_html = ""
+        if not forgot_zone:
+            due = effective_due_back(row.get("reason", ""), row.get("timestamp", ""))
+            if due is not None:
+                due_word = "Due back" if not is_late else "Was due back"
+                due_html = (
+                    f"<div class='bc-meta'>{due_word} "
+                    f"<span class='bc-time'>{esc(format_board_time(due))}</span></div>"
+                )
+
         if forgot_zone:
             # A count in the thousands tells you nothing. Say what it means.
             late_chip = "<div class='bc-chip bc-chip-forgot'>NO SIGN-IN</div>"
@@ -3024,6 +3040,7 @@ def render_out_cards(df_out: pd.DataFrame, forgot_zone: bool = False):
             f"<div class='bc-name'>{name}</div>"
             f"{details_html}"
             f"<div class='bc-meta'>Signed out at <span class='bc-time'>{when}</span></div>"
+            f"{due_html}"
             f"</div>"
         )
     st.markdown(f"<div class='bc-grid'>{''.join(cards)}</div>", unsafe_allow_html=True)
