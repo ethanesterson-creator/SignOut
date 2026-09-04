@@ -3083,6 +3083,12 @@ def render_van_cards(status_map: dict):
 # =================================================
 # PAGES
 # =================================================
+# Row cap for the admin history tables (staff log and van log alike), so a
+# season's worth of rows never makes either table slow to render. The full
+# record is always available through the archive tabs and the CSV downloads.
+HISTORY_TABLE_LIMIT = 200
+
+
 def render_stale_fork(reason: str, other_reason: str):
     """Show the In-or-Out question for someone who has been out a long time.
 
@@ -4281,7 +4287,6 @@ def page_admin_history(staff_pins: dict):
         # Show only the most recent rows so this table stays fast no matter how
         # large the live tab is. The complete record is always available through
         # the full-history download and the archive tab.
-        HISTORY_TABLE_LIMIT = 200
 
         # Filtering by name BEFORE the row cap, not after, is the whole point:
         # otherwise looking up one counselor's history means scrolling through
@@ -4334,12 +4339,29 @@ def page_admin_history(staff_pins: dict):
     if df_vans is None or df_vans.empty:
         st.info("No van logs recorded yet.")
     else:
-        dfv = df_vans.copy()
+        # Same reasoning as Full Log History above: filter by van BEFORE the
+        # row cap, so a specific van's trips aren't buried under the other
+        # two vans' most recent rows, and cap the table so it stays fast no
+        # matter how large the live tab is.
+        van_options = ["All"] + VANS
+        van_filter = st.selectbox("Filter by van", van_options, format_func=van_label, key="admin_van_history_filter")
+        dfv = df_vans if van_filter == "All" else df_vans[df_vans["van"] == van_filter]
+
+        total_van_rows = len(dfv)
+        dfv = dfv.copy()
         if "timestamp" in dfv.columns:
             dfv["timestamp"] = pd.to_datetime(dfv["timestamp"], errors="coerce")
+            dfv = dfv.sort_values("timestamp", na_position="first")
             dfv["timestamp_str"] = dfv["timestamp"].apply(format_time)
         else:
             dfv["timestamp_str"] = ""
+
+        if total_van_rows > HISTORY_TABLE_LIMIT:
+            dfv = dfv.tail(HISTORY_TABLE_LIMIT)
+            scope_label = "live" if van_filter == "All" else f"live {van_label(van_filter)}"
+            st.caption(f"Showing the most recent {HISTORY_TABLE_LIMIT} of {total_van_rows} {scope_label} rows. Use the download for the full record.")
+        elif van_filter != "All":
+            st.caption(f"{total_van_rows} row(s) for {van_label(van_filter)}.")
 
         dfv = dfv.rename(columns={
             "id": "ID",
