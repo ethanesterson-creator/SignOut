@@ -1530,8 +1530,14 @@ def ensure_logs_header(sheet):
         missing = [h for h in LOGS_HEADERS_REQUIRED if h not in headers]
         if missing:
             new_headers = headers + missing
-            sheet.delete_rows(1)
-            sheet.insert_row(new_headers, 1)
+            # One call, not delete-then-insert: those are two separate Sheets
+            # API round trips, and a failure on the second one (a timeout, a
+            # dropped connection) would leave the tab with NO header row at
+            # all - every future read would then treat the first real data
+            # row as the header, silently corrupting the sheet. update()
+            # overwrites row 1 in place, so it either lands whole or not at
+            # all.
+            sheet.update("A1", [new_headers])
     except Exception:
         # Best effort only. The reader already tolerates messy headers and the
         # loaders fill missing columns in memory, so a failure here must never
@@ -2903,12 +2909,14 @@ def ensure_vans_header(sheet):
                     extras.append(str(h).strip())
                     seen.add(hl)
             clean = VANS_HEADERS_REQUIRED + extras
-            sheet.delete_rows(1)
-            sheet.insert_row(clean, 1)
+            # Single atomic overwrite, not delete-then-insert - see the note
+            # in ensure_logs_header for why a two-step header rewrite is
+            # dangerous: a failure between the two calls would delete the
+            # header row and never put one back.
+            sheet.update("A1", [clean])
         elif missing:
             new_headers = [str(h).strip() for h in headers] + missing
-            sheet.delete_rows(1)
-            sheet.insert_row(new_headers, 1)
+            sheet.update("A1", [new_headers])
     except Exception:
         # Best effort, same as the logs header. Never halt on this.
         pass
