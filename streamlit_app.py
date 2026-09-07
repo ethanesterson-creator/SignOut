@@ -3475,6 +3475,14 @@ def page_whos_out():
             render_day_off_chips(day_off_names)
             st.caption("Scheduled days off from the days_off sheet. Everyone still signs out and in at the Big House.")
 
+        # Van status. This board is the one screen meant to sit unattended and
+        # be glanced at from across the room, so whether a van is even
+        # available belongs here too, not just on the Vans page you have to
+        # walk up to and tap through.
+        st.markdown("")
+        section_title("Vans")
+        render_van_cards(compute_van_status(load_vans_df_cached()))
+
     live_board()
     crest_footer()
 
@@ -3659,6 +3667,11 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                     st.error(err)
                     return
 
+                # Drop the cache first: load_vans_df_cached is kept for up to
+                # ttl=10s, and this is a toggle-shaped decision, not just a
+                # display. Checking a stale copy here could write a second
+                # CHECKIN row on a van someone else just brought back.
+                clear_vans_cache()
                 fresh_df = load_vans_df_cached()
                 if compute_van_status(fresh_df).get(selected, {}).get("status") != "OUT":
                     st.error(f"{van_label(selected)} is already signed in.")
@@ -3763,7 +3776,12 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                     st.error("This code is not cleared to drive a van.")
                     return
 
-                # Guard against two people grabbing the same van at once.
+                # Guard against two people grabbing the same van at once. This
+                # only works against a FRESH read: load_vans_df_cached is kept
+                # for up to ttl=10s, and two counselors tapping "Take Out"
+                # inside that window would both have read the van as IN and
+                # both would pass a cached check, double-booking the van.
+                clear_vans_cache()
                 if compute_van_status(load_vans_df_cached()).get(selected, {}).get("status") == "OUT":
                     st.error(f"{van_label(selected)} was taken a moment ago. Pick another van.")
                     return
