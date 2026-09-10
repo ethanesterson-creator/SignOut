@@ -1831,6 +1831,17 @@ def delete_logs_by_ids(ids_to_delete):
     for deletion. Reading ids fresh off the sheet and deleting only those
     rows removes both failure modes: nothing is ever cleared wholesale, and
     the id lookup can't miss a row written moments ago.
+
+    All matched rows are removed in ONE batchUpdate call, not one
+    sheet.delete_rows() per row. That method makes its own network round trip
+    every time it is called, so ticking off a season's worth of pre-season
+    test entries (or any double-digit selection) meant a delete that took
+    several seconds and could trip Google's per-minute write-request quota
+    partway through, silently leaving some selected rows deleted and others
+    still on the board with no way to tell which from the UI. A single batch
+    of deleteDimension requests - still highest row first, so index shifts
+    from earlier deletes in the same batch never disturb a later one - does
+    the whole selection in one call.
     """
     ids_to_delete = {str(i).strip() for i in ids_to_delete if str(i).strip()}
     if not ids_to_delete:
@@ -1857,8 +1868,20 @@ def delete_logs_by_ids(ids_to_delete):
         return
 
     try:
-        for row_num in sorted(rows_to_delete, reverse=True):
-            sheet.delete_rows(row_num)
+        delete_requests = [
+            {
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": sheet.id,
+                        "dimension": "ROWS",
+                        "startIndex": row_num - 1,
+                        "endIndex": row_num,
+                    }
+                }
+            }
+            for row_num in sorted(rows_to_delete, reverse=True)
+        ]
+        sheet.spreadsheet.batch_update({"requests": delete_requests})
         clear_logs_cache()
         try:
             rebuild_current_status_from_logs()
