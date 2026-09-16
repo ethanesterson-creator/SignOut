@@ -4535,6 +4535,99 @@ def page_admin_history(staff_pins: dict):
 
     df_logs = load_logs_df_cached()
 
+    # -------------------------------------------------
+    # ANALYTICS: real numbers instead of just a raw filtered table. Computed
+    # entirely from the already-loaded logs/vans DataFrames, so this costs no
+    # extra Sheets round trips.
+    # -------------------------------------------------
+    section_title("Analytics")
+    if df_logs.empty:
+        st.info("No logs recorded yet.")
+    else:
+        df_out_rows = df_logs[df_logs["action"] == "OUT"]
+        df_in_rows = df_logs[df_logs["action"] == "IN"]
+
+        today_date = datetime.now(TZ).date()
+        signouts_today = int((df_out_rows["timestamp"].dt.date == today_date).sum())
+        currently_out_count = len(get_currently_out(load_current_status_df_cached()))
+        late_mask = df_in_rows["late"].astype(str).str.strip() != ""
+        late_rate = (late_mask.sum() / len(df_in_rows) * 100) if len(df_in_rows) else 0
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total sign-outs (live tab)", len(df_out_rows))
+        m2.metric("Sign-outs today", signouts_today)
+        m3.metric("Currently out", currently_out_count)
+        m4.metric("Late-return rate", f"{late_rate:.0f}%")
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.caption("Sign-outs per day, last 14 days")
+            cutoff = datetime.now(TZ) - timedelta(days=14)
+            recent_out = df_out_rows[df_out_rows["timestamp"] >= cutoff]
+            if recent_out.empty:
+                st.caption("Nothing in the last 14 days.")
+            else:
+                daily_counts = recent_out.groupby(recent_out["timestamp"].dt.date).size()
+                daily_counts.index = daily_counts.index.astype(str)
+                st.bar_chart(daily_counts)
+        with col_b:
+            st.caption("Top reasons (live tab)")
+            reason_counts = df_out_rows["reason"].value_counts()
+            if reason_counts.empty:
+                st.caption("No reasons recorded yet.")
+            else:
+                st.bar_chart(reason_counts)
+
+        st.caption("Late-return rate by person (3+ trips, live tab)")
+        late_by_name = (
+            df_in_rows.assign(is_late=late_mask)
+            .groupby("name")
+            .agg(trips=("is_late", "size"), late_count=("is_late", "sum"))
+        )
+        late_by_name = late_by_name[late_by_name["trips"] >= 3].copy()
+        if late_by_name.empty:
+            st.caption("Not enough data yet (need 3+ round trips for someone to show up here).")
+        else:
+            late_by_name["late_pct"] = (late_by_name["late_count"] / late_by_name["trips"] * 100).round(0).astype(int)
+            late_by_name = late_by_name.sort_values("late_pct", ascending=False).head(10).reset_index()
+            late_by_name = late_by_name.rename(columns={
+                "name": "Name", "trips": "Trips", "late_count": "Late Returns", "late_pct": "Late %",
+            })
+            st.dataframe(late_by_name, use_container_width=True)
+
+        df_vans_all = load_vans_df_cached()
+        if not df_vans_all.empty and "action" in df_vans_all.columns:
+            van_out_rows = df_vans_all[df_vans_all["action"].astype(str).str.upper() == "OUT"]
+            if not van_out_rows.empty:
+                st.caption("Van trips by vehicle (live tab)")
+                st.bar_chart(van_out_rows["van"].value_counts())
+
+        weekly_cutoff = datetime.now(TZ) - timedelta(days=7)
+        weekly_out = df_out_rows[df_out_rows["timestamp"] >= weekly_cutoff]
+        weekly_in = df_in_rows[df_in_rows["timestamp"] >= weekly_cutoff]
+        weekly_late = weekly_in["late"].astype(str).str.strip() != ""
+        weekly_summary = (
+            weekly_out.assign(date=weekly_out["timestamp"].dt.date)
+            .groupby("date")
+            .size()
+            .reset_index(name="signouts")
+        )
+        if not weekly_in.empty:
+            late_per_day = weekly_in.assign(is_late=weekly_late, date=weekly_in["timestamp"].dt.date)
+            late_per_day = late_per_day.groupby("date")["is_late"].sum().reset_index(name="late_returns")
+            weekly_summary = weekly_summary.merge(late_per_day, on="date", how="outer").fillna(0)
+        else:
+            weekly_summary["late_returns"] = 0
+        weekly_summary = weekly_summary.sort_values("date")
+        st.download_button(
+            "Download This Week's Summary (CSV)",
+            data=weekly_summary.to_csv(index=False),
+            file_name=f"{CAMP_CSV_PREFIX}_weekly_summary.csv",
+            mime="text/csv",
+        )
+
+    st.markdown("---")
+
     section_title("Full Log History")
     if df_logs.empty:
         st.info("No logs recorded yet.")
