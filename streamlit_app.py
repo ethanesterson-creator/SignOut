@@ -1,3 +1,4 @@
+import hashlib
 import html as html_lib
 import threading
 import uuid
@@ -14,9 +15,27 @@ from gspread.exceptions import APIError, GSpreadException, WorksheetNotFound
 from google.oauth2.service_account import Credentials
 
 # =================================================
+# CAMP IDENTITY
+# =================================================
+# Every value here is overridable via st.secrets so the same codebase can run
+# a different camp's deployment without touching a single line of code.
+CAMP_NAME = st.secrets.get("camp_name", "Camp Bauercrest")
+CAMP_TAGLINE = st.secrets.get("camp_tagline", "Amesbury, MA &middot; Est. 1931")
+CAMP_LOGO_PATH = st.secrets.get("camp_logo_path", "logo-header-2.png")
+CAMP_NOTIFY_PREFIX = st.secrets.get("camp_notify_prefix", "Bauercrest")
+CAMP_CSV_PREFIX = st.secrets.get("camp_csv_prefix", "bauercrest")
+
+# Salt mixed into hashed PINs (see hash_pin below). Set pin_salt in secrets
+# per deployment so a leaked staff sheet from one camp can't be replayed
+# against another camp's hashes. An empty default still hashes (protecting
+# against someone with read access to the Sheet but not to secrets.toml),
+# it's just not camp-unique until a real salt is set.
+PIN_SALT = st.secrets.get("pin_salt", "")
+
+# =================================================
 # TIMEZONE
 # =================================================
-TZ = pytz.timezone("US/Eastern")
+TZ = pytz.timezone(st.secrets.get("camp_timezone", "US/Eastern"))
 
 # =================================================
 # CONFIG
@@ -31,6 +50,8 @@ SHEET_DAYS_OFF = "days_off"  # optional tab; used for the Day Off board (display
 SHEET_SETTINGS = "settings"  # auto-created; holds the campwide emergency flag
 SHEET_LOGS_ARCHIVE = "logs_archive"  # auto-created; permanent history moved out of the live tab
 SHEET_VANS_ARCHIVE = "vans_archive"  # auto-created; same idea, for the vans tab
+SHEET_AUDIT_LOG = "audit_log"  # auto-created; who did which destructive/admin action, and when
+AUDIT_LOG_HEADERS = ["id", "timestamp", "admin", "action", "detail"]
 
 # When archiving, always keep rows from at least this many days back in the
 # live tab, on top of keeping every row for anyone currently out. A day-off
@@ -850,7 +871,7 @@ def big_flash(msg: str, kind: str = "in", word: str = "", ask: str = ""):
 
 def crest_footer():
     st.markdown(
-        "<div class='bc-footer'>Camp Bauercrest &middot; Amesbury, MA &middot; Est. 1931</div>",
+        f"<div class='bc-footer'>{esc(CAMP_NAME)} &middot; {CAMP_TAGLINE}</div>",
         unsafe_allow_html=True,
     )
 
@@ -862,6 +883,19 @@ def normalize_pin(pin: str) -> str:
     if s.endswith(".0"):
         s = s[:-2]
     return s.zfill(4)
+
+
+def hash_pin(raw_pin: str) -> str:
+    """SHA-256 of a normalized PIN, salted per-deployment. Storing this
+    instead of the raw PIN means anyone who gets read access to the staff
+    sheet (a shared link, a misconfigured permission) sees no usable codes."""
+    return hashlib.sha256((PIN_SALT + normalize_pin(raw_pin)).encode("utf-8")).hexdigest()
+
+
+def is_hashed_pin(value: str) -> bool:
+    """True if a staff sheet's pin cell already holds a hash, not a raw code."""
+    s = str(value).strip().lower()
+    return len(s) == 64 and all(c in "0123456789abcdef" for c in s)
 
 
 def format_time(dt):
@@ -972,6 +1006,50 @@ def get_settings_sheet():
         except Exception:
             pass
         return sheet
+
+
+def get_audit_log_sheet():
+    """Get the audit_log tab, creating it if missing."""
+    try:
+        return get_worksheet(SHEET_AUDIT_LOG)
+    except WorksheetNotFound:
+        ss = get_spreadsheet()
+        sheet = ss.add_worksheet(title=SHEET_AUDIT_LOG, rows=200, cols=len(AUDIT_LOG_HEADERS))
+        sheet.update("A1", [AUDIT_LOG_HEADERS])
+        try:
+            get_worksheet.clear()
+        except Exception:
+            pass
+        return sheet
+
+
+@st.cache_data(ttl=30)
+def load_audit_log_df_cached():
+    try:
+        sheet = get_worksheet(SHEET_AUDIT_LOG)
+        return read_sheet_df(sheet)
+    except Exception:
+        return pd.DataFrame(columns=AUDIT_LOG_HEADERS)
+
+
+def log_audit_event(admin_name: str, action: str, detail: str = ""):
+    """Record who did a destructive/admin action, and when.
+
+    Best-effort and non-blocking: a Sheets hiccup writing the audit trail must
+    never stop the admin action it's recording, so every failure here is
+    swallowed. This is a record, not a gate.
+    """
+    try:
+        sheet = get_audit_log_sheet()
+        sheet.append_row([
+            str(uuid.uuid4())[:8],
+            datetime.now(TZ).isoformat(timespec="seconds"),
+            admin_name,
+            action,
+            detail,
+        ])
+    except Exception:
+        pass
 
 
 def set_setting(key: str, value: str):
@@ -1291,7 +1369,7 @@ def check_late_and_alert(df_out: pd.DataFrame):
             mins = row_minutes_late(row)
             if mins > 0 and rid and rid not in already:
                 notify_phone(
-                    "Bauercrest: LATE",
+                    f"{CAMP_NOTIFY_PREFIX}: LATE",
                     f"{row.get('name','')} is {mins} min late ({row.get('reason','')})",
                 )
                 new_alerts.append(rid)
@@ -1340,7 +1418,7 @@ def check_nightly_summary(df_out: pd.DataFrame):
         set_setting(NIGHTLY_SUMMARY_KEY, today)
 
         if df_out is None or df_out.empty:
-            notify_phone("Bauercrest: Nightly check", "All staff are signed IN. Nobody is out.")
+            notify_phone(f"{CAMP_NOTIFY_PREFIX}: Nightly check", "All staff are signed IN. Nobody is out.")
             return
 
         people = []
@@ -1350,7 +1428,7 @@ def check_nightly_summary(df_out: pd.DataFrame):
             people.append(f"{nm} ({rs})" if rs else nm)
 
         body = f"{len(people)} still signed OUT: " + ", ".join(people)
-        notify_phone("Bauercrest: Still out tonight", body[:1500])
+        notify_phone(f"{CAMP_NOTIFY_PREFIX}: Still out tonight", body[:1500])
     except Exception:
         pass
 
@@ -1470,11 +1548,18 @@ def get_staff_pins_and_lists():
 
 
 def build_pin_lookup(staff_pins: dict) -> dict:
-    """Map each code to the staff who use it. A list catches shared codes."""
+    """Map each code to the staff who use it. A list catches shared codes.
+
+    A staff row's pin cell is either a raw 4-digit code (legacy, or a camp
+    that hasn't run the PIN migration yet) or a sha256 hash (post-migration).
+    Keying the lookup by whichever form is actually stored, rather than
+    forcing every row through normalize_pin, lets both forms coexist in the
+    same sheet during a gradual migration.
+    """
     lookup = {}
     for name, pin in staff_pins.items():
-        p = normalize_pin(pin)
-        lookup.setdefault(p, []).append(name)
+        key = pin if is_hashed_pin(pin) else normalize_pin(pin)
+        lookup.setdefault(key, []).append(name)
     return lookup
 
 
@@ -1484,10 +1569,12 @@ def resolve_code(code: str, pin_lookup: dict):
     Returns (name, error). Exactly one match returns the name. No match or a
     shared code returns an error message and no name.
     """
-    p = normalize_pin(code)
     if not str(code).strip():
         return None, "Enter your code."
-    names = pin_lookup.get(p, [])
+    # Check both forms: whichever this staff row's pin cell was stored as.
+    plain_matches = pin_lookup.get(normalize_pin(code), [])
+    hash_matches = pin_lookup.get(hash_pin(code), [])
+    names = list(dict.fromkeys(plain_matches + hash_matches))
     if len(names) == 1:
         return names[0], None
     if len(names) == 0:
@@ -1516,6 +1603,49 @@ def resolve_admin_code(code: str, staff_pins: dict):
     if name not in get_admin_names():
         return None, "This code is not an admin code."
     return name, None
+
+
+def count_unhashed_staff_pins() -> int:
+    """How many staff rows still have a plaintext pin, for the admin banner."""
+    staff_df = load_staff_df_cached()
+    pins = staff_df["pin"].astype(str)
+    return int((pins.str.strip() != "").sum() - pins.apply(is_hashed_pin).sum())
+
+
+def migrate_staff_pins_to_hashed() -> int:
+    """One-way: replace every plaintext pin in the staff sheet with its hash.
+
+    Rows already hashed, or blank, are left untouched, so this is safe to run
+    more than once. Written as a single batched update so a mid-write failure
+    can never leave the sheet in a state that isn't exactly "before" or
+    "after" for every row. Returns how many rows were changed.
+    """
+    sheet = get_worksheet(SHEET_STAFF)
+    values = sheet.get_all_values()
+    if not values:
+        return 0
+    headers = [str(h).strip().lower() for h in values[0]]
+    if "pin" not in headers:
+        return 0
+    col_idx = headers.index("pin")
+
+    new_col = []
+    changed = 0
+    for row in values[1:]:
+        cell = row[col_idx] if col_idx < len(row) else ""
+        raw = str(cell).strip()
+        if raw and not is_hashed_pin(raw):
+            new_col.append([hash_pin(raw)])
+            changed += 1
+        else:
+            new_col.append([cell])
+
+    if changed:
+        start = gspread.utils.rowcol_to_a1(2, col_idx + 1)
+        end = gspread.utils.rowcol_to_a1(len(values), col_idx + 1)
+        sheet.update(f"{start}:{end}", new_col)
+        load_staff_df_cached.clear()
+    return changed
 
 # =================================================
 # LOGS SHEET HELPERS
@@ -1693,9 +1823,9 @@ def append_log_row(name: str, reason: str, other_reason: str, action: str, statu
         if notify:
             if action == "OUT":
                 detail = other_reason.strip() if (reason.startswith("Other") and other_reason.strip()) else reason
-                notify_phone("Bauercrest: Signed OUT", f"{name}: {detail}")
+                notify_phone(f"{CAMP_NOTIFY_PREFIX}: Signed OUT", f"{name}: {detail}")
             else:
-                notify_phone("Bauercrest: Signed IN", name)
+                notify_phone(f"{CAMP_NOTIFY_PREFIX}: Signed IN", name)
 
         # Handed back so the caller can offer an Undo on this exact row.
         return row_dict["id"]
@@ -3256,7 +3386,7 @@ def whos_out_strip():
 
 
 def page_sign_in_out(staff_pins: dict, staff_names: list):
-    page_title("Camp Bauercrest Staff", "Sign In / Out")
+    page_title(f"{CAMP_NAME} Staff", "Sign In / Out")
 
     pin_lookup = build_pin_lookup(staff_pins)
 
@@ -3305,7 +3435,7 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
         with uc1:
             if st.button(f"Undo {undo['desc']}", key="undo_btn", use_container_width=True):
                 if delete_log_row_by_id(undo["id"]):
-                    notify_phone("Bauercrest: UNDO", f"Undo: {undo['desc']}")
+                    notify_phone(f"{CAMP_NOTIFY_PREFIX}: UNDO", f"Undo: {undo['desc']}")
                     st.session_state["log_flash"] = f"Undone: {undo['desc']}"
                     st.session_state["log_flash_kind"] = "out"
                     st.session_state["log_flash_word"] = "UNDONE"
@@ -3428,7 +3558,7 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
                     st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED IN"
                     if mins > 0:
                         notify_phone(
-                            "Bauercrest: Signed IN (LATE)",
+                            f"{CAMP_NOTIFY_PREFIX}: Signed IN (LATE)",
                             f"{name} signed in {mins} min late ({info.get('reason','')})",
                         )
                         st.session_state["log_flash"] = f"Welcome back. You were {mins} min late."
@@ -3740,7 +3870,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                     return
 
                 notify_vans(
-                    "Bauercrest: Van IN",
+                    f"{CAMP_NOTIFY_PREFIX}: Van IN",
                     f"{van_label(selected)} returned by {who}, gas: {gas_left}",
                 )
 
@@ -3839,7 +3969,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                     return
 
                 ptext = other_purpose.strip() if (purpose == "Other" and other_purpose.strip()) else purpose
-                notify_vans("Bauercrest: Van OUT", f"{van_label(selected)} - {driver} ({ptext})")
+                notify_vans(f"{CAMP_NOTIFY_PREFIX}: Van OUT", f"{van_label(selected)} - {driver} ({ptext})")
 
                 # Sign the driver out of camp so the board matches the van.
                 camp_note = ""
@@ -3920,7 +4050,7 @@ def page_group_signout(staff_pins: dict, staff_names: list):
         big_banner(f"BRINGING BACK {leader.upper()}'S GROUP", f"Signed out for {purpose}", "in")
         if st.button("Sign This Group Back In", key="group_bring_back", use_container_width=True):
             freed = signin_everyone_in_group(tag)
-            notify_vans("Bauercrest: Group IN", f"{leader}'s group ({purpose}) is back: {len(freed)} signed in.")
+            notify_vans(f"{CAMP_NOTIFY_PREFIX}: Group IN", f"{leader}'s group ({purpose}) is back: {len(freed)} signed in.")
             st.session_state["group_form_nonce"] += 1
             st.session_state.pop("group_leader", None)
             st.session_state["group_flash"] = (
@@ -3957,7 +4087,7 @@ def page_group_signout(staff_pins: dict, staff_names: list):
                 trip_tag = f"{GROUP_SIGNOUT_TAG}|{uuid.uuid4().hex[:8]}"
                 signed = auto_signout_for_group(full_party, purpose, other_purpose.strip(), trip_tag)
                 ptext = other_purpose.strip() if (purpose == "Other" and other_purpose.strip()) else purpose
-                notify_vans("Bauercrest: Group OUT", f"{leader} took {len(signed)} out: {ptext}")
+                notify_vans(f"{CAMP_NOTIFY_PREFIX}: Group OUT", f"{leader} took {len(signed)} out: {ptext}")
                 st.session_state["group_form_nonce"] += 1
                 st.session_state.pop("group_leader", None)
                 st.session_state["group_flash"] = (
@@ -4023,7 +4153,8 @@ def page_admin_history(staff_pins: dict):
                 st.session_state["emergency_error"] = err
             else:
                 set_emergency(False)
-                notify_phone("Bauercrest: Emergency CLEARED", f"Cleared by {admin_name}.")
+                log_audit_event(admin_name, "Emergency cleared")
+                notify_phone(f"{CAMP_NOTIFY_PREFIX}: Emergency CLEARED", f"Cleared by {admin_name}.")
                 st.session_state["emergency_flash"] = f"Emergency cleared by {admin_name}."
             st.rerun()
     else:
@@ -4049,7 +4180,8 @@ def page_admin_history(staff_pins: dict):
             else:
                 set_emergency(True, em_msg.strip())
                 detail = f" {em_msg.strip()}" if em_msg.strip() else ""
-                notify_phone("Bauercrest: EMERGENCY DECLARED", f"By {admin_name}.{detail}")
+                log_audit_event(admin_name, "Emergency declared", em_msg.strip())
+                notify_phone(f"{CAMP_NOTIFY_PREFIX}: EMERGENCY DECLARED", f"By {admin_name}.{detail}")
                 st.session_state["emergency_flash"] = f"Emergency declared by {admin_name}."
             st.rerun()
 
@@ -4163,7 +4295,7 @@ def page_admin_history(staff_pins: dict):
                 except Exception:
                     pass
 
-                notify_vans("Bauercrest: Van IN", f"{van_label(which_van)} signed in by admin {admin_name}")
+                notify_vans(f"{CAMP_NOTIFY_PREFIX}: Van IN", f"{van_label(which_van)} signed in by admin {admin_name}")
                 st.session_state["admin_flash"] = f"{van_label(which_van)} signed in by {admin_name}."
                 st.rerun()
 
@@ -4206,7 +4338,8 @@ def page_admin_history(staff_pins: dict):
             with st.spinner("Archiving. This can take a moment for thousands of rows."):
                 res = archive_old_logs()
             if res["ok"]:
-                notify_phone("Bauercrest: Logs archived", f"{admin_name} archived {res['archived']} rows.")
+                log_audit_event(admin_name, "Archived old logs", f"{res['archived']} rows")
+                notify_phone(f"{CAMP_NOTIFY_PREFIX}: Logs archived", f"{admin_name} archived {res['archived']} rows.")
                 st.session_state["archive_flash"] = res["message"]
             else:
                 st.session_state["archive_error"] = res["message"]
@@ -4229,7 +4362,7 @@ def page_admin_history(staff_pins: dict):
         st.download_button(
             "Download FULL History (live + archive) as CSV",
             data=full_csv,
-            file_name="bauercrest_full_signout_history.csv",
+            file_name=f"{CAMP_CSV_PREFIX}_full_signout_history.csv",
             mime="text/csv",
             key="full_history_dl",
         )
@@ -4275,7 +4408,8 @@ def page_admin_history(staff_pins: dict):
             with st.spinner("Archiving van logs..."):
                 van_res = archive_old_vans()
             if van_res["ok"]:
-                notify_phone("Bauercrest: Van logs archived", f"{admin_name} archived {van_res['archived']} van rows.")
+                log_audit_event(admin_name, "Archived old van logs", f"{van_res['archived']} rows")
+                notify_phone(f"{CAMP_NOTIFY_PREFIX}: Van logs archived", f"{admin_name} archived {van_res['archived']} van rows.")
                 st.session_state["van_archive_flash"] = van_res["message"]
             else:
                 st.session_state["van_archive_error"] = van_res["message"]
@@ -4295,7 +4429,7 @@ def page_admin_history(staff_pins: dict):
         st.download_button(
             "Download FULL Van History (live + archive) as CSV",
             data=full_van_csv,
-            file_name="bauercrest_full_van_history.csv",
+            file_name=f"{CAMP_CSV_PREFIX}_full_van_history.csv",
             mime="text/csv",
             key="full_van_history_dl",
         )
@@ -4324,6 +4458,78 @@ def page_admin_history(staff_pins: dict):
             st.success("Status cache rebuilt from history.")
         except Exception:
             st.error("Could not rebuild the status cache right now. Please try again.")
+
+    st.markdown("---")
+
+    # -------------------------------------------------
+    # PIN SECURITY: one-way migration from plaintext to hashed PINs
+    # -------------------------------------------------
+    section_title("Staff PIN Security")
+    pin_flash = st.session_state.pop("pin_migrate_flash", "")
+    if pin_flash:
+        st.success(pin_flash)
+    pin_err = st.session_state.pop("pin_migrate_error", "")
+    if pin_err:
+        st.error(pin_err)
+
+    unhashed_count = count_unhashed_staff_pins()
+    if unhashed_count == 0:
+        st.caption(
+            "All staff PINs are already hashed. Nobody with read access to the "
+            "staff sheet can see anyone's actual code."
+        )
+    else:
+        st.warning(
+            f"{unhashed_count} staff PIN(s) are still stored as plain text in the staff "
+            "sheet — anyone with read access to that sheet can see them. Hashing replaces "
+            "each plaintext code with a one-way scramble; staff keep signing in with the "
+            "same code, but the sheet itself no longer reveals it. This cannot be undone "
+            "from within the app — keep a backup of the staff tab first if you ever want "
+            "the original codes recoverable."
+        )
+        with st.form("pin_migrate_form", clear_on_submit=True):
+            pin_migrate_code = st.text_input(
+                "Your admin code", type="password", max_chars=4, key="pin_migrate_code"
+            )
+            pin_migrate_confirm = st.checkbox(
+                "I understand this is permanent and I have a backup if I want one."
+            )
+            pin_migrate_go = st.form_submit_button("Hash All Plaintext PINs Now")
+        if pin_migrate_go:
+            admin_name, err = resolve_admin_code(pin_migrate_code, staff_pins)
+            if err:
+                st.session_state["pin_migrate_error"] = err
+            elif not pin_migrate_confirm:
+                st.session_state["pin_migrate_error"] = "Tick the confirm box first."
+            else:
+                try:
+                    n = migrate_staff_pins_to_hashed()
+                    log_audit_event(admin_name, "Hashed plaintext PINs", f"{n} row(s)")
+                    st.session_state["pin_migrate_flash"] = f"{admin_name} hashed {n} staff PIN(s)."
+                except Exception:
+                    st.session_state["pin_migrate_error"] = (
+                        "Could not update the staff sheet right now. Please try again."
+                    )
+            st.rerun()
+
+    st.markdown("---")
+
+    # -------------------------------------------------
+    # AUDIT LOG: read-only trail of who did what admin action, and when
+    # -------------------------------------------------
+    section_title("Audit Log")
+    df_audit = load_audit_log_df_cached()
+    if df_audit.empty:
+        st.caption("No audit events recorded yet. Every emergency, archive, deletion, and PIN migration shows up here.")
+    else:
+        df_audit_view = df_audit.tail(50).iloc[::-1].copy()
+        df_audit_view["timestamp"] = pd.to_datetime(df_audit_view["timestamp"], errors="coerce").apply(format_time)
+        df_audit_view = df_audit_view.rename(columns={
+            "timestamp": "When", "admin": "Who", "action": "Action", "detail": "Detail",
+        })
+        cols = [c for c in ["When", "Who", "Action", "Detail"] if c in df_audit_view.columns]
+        st.dataframe(df_audit_view[cols], use_container_width=True)
+        st.caption(f"Showing the most recent {len(df_audit_view)} of {len(df_audit)} audit event(s).")
 
     st.markdown("---")
 
@@ -4472,6 +4678,7 @@ def page_admin_history(staff_pins: dict):
 
         if selected_ids and st.button("Delete Selected Entries", key="admin_delete_specific_button"):
             delete_logs_by_ids(selected_ids)
+            log_audit_event("(admin area, password gate only)", "Deleted specific logs", f"{len(selected_ids)} row(s): {', '.join(selected_ids)}")
             st.success(f"Deleted {len(selected_ids)} log(s).")
             st.rerun()
 
@@ -4482,6 +4689,7 @@ def page_admin_history(staff_pins: dict):
     confirm_all = st.checkbox("I understand this will permanently delete all logs.", key="admin_confirm_delete_all_logs")
     if confirm_all and st.button("Delete ALL Logs", key="admin_delete_all_logs_button"):
         clear_all_logs()
+        log_audit_event("(admin area, password gate only)", "Deleted ALL logs")
         st.success("All logs cleared.")
         st.rerun()
 
@@ -4517,14 +4725,14 @@ def ensure_headers_once():
 
 def _main_body():
     st.set_page_config(
-        page_title="Bauercrest Staff Sign-Out",
+        page_title=f"{CAMP_NAME} Staff Sign-Out",
         page_icon="🏕️",
         layout="wide",
     )
     inject_css()
     ensure_headers_once()
 
-    logo_path = Path("logo-header-2.png")
+    logo_path = Path(CAMP_LOGO_PATH)
     if logo_path.exists():
         st.sidebar.image(str(logo_path), use_container_width=True)
 
