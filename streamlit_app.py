@@ -86,8 +86,13 @@ SHEETS_TIMEOUT_SECONDS = 10
 
 REASONS = ["Period Off", "Day Off", "Night Off", "Other (type reason)"]
 
-VANS = ["Van 1", "Van 2", "Van 3"]
-VAN_LABELS = {"Van 1": "Van 1 (White)", "Van 2": "Van 2 (Black)", "Van 3": "Van 3 (Red)"}
+# A camp's fleet size and van names/colors are its own, not Bauercrest's -
+# overridable via secrets (vans = [...], [van_labels] table) so a different
+# camp's deployment doesn't need a code change to add or rename a vehicle.
+VANS = list(st.secrets.get("vans", ["Van 1", "Van 2", "Van 3"]))
+VAN_LABELS = dict(st.secrets.get(
+    "van_labels", {"Van 1": "Van 1 (White)", "Van 2": "Van 2 (Black)", "Van 3": "Van 3 (Red)"}
+))
 
 
 def van_label(v: str) -> str:
@@ -1021,6 +1026,49 @@ def get_audit_log_sheet():
         except Exception:
             pass
         return sheet
+
+
+def bootstrap_new_camp_sheets() -> list:
+    """Create every tab this app needs on a fresh spreadsheet, with the right
+    headers, so a new camp can go from a blank spreadsheet to a working kiosk
+    without hand-building any tab in Google Sheets first. Safe to run more
+    than once: only ever creates a tab that's missing, never touches or
+    overwrites one that already exists. Returns the list of tabs it created.
+    """
+    ss = get_spreadsheet()
+    existing = {ws.title for ws in ss.worksheets()}
+    created = []
+
+    def _create(title, headers):
+        if title in existing:
+            return
+        sheet = ss.add_worksheet(title=title, rows=200, cols=max(len(headers), 1))
+        sheet.update("A1", [headers])
+        created.append(title)
+
+    # These five have no auto-create-on-first-read getter elsewhere in the
+    # app, so a brand new spreadsheet needs them built by hand today.
+    _create(SHEET_STAFF, ["name", "pin", "active", "admin"])
+    _create(SHEET_DRIVERS, ["name", "passed_test"])
+    _create(SHEET_DAYS_OFF, ["name", "weekday", "active"])
+    _create(SHEET_LOGS, LOGS_HEADERS_REQUIRED)
+    _create(SHEET_VANS, VANS_HEADERS_REQUIRED)
+
+    if created:
+        try:
+            get_worksheet.clear()
+        except Exception:
+            pass
+
+    # Everything else already knows how to create itself on first access.
+    get_settings_sheet()
+    get_schedule_sheet()
+    get_current_status_sheet()
+    get_logs_archive_sheet()
+    get_vans_archive_sheet()
+    get_audit_log_sheet()
+
+    return created
 
 
 @st.cache_data(ttl=30)
@@ -4126,6 +4174,25 @@ def page_admin_history(staff_pins: dict):
             st.session_state.admin_authenticated = False
             st.success("Admin area locked again.")
             st.rerun()
+
+    with st.expander("New Camp Setup (run once, on a brand new spreadsheet)", expanded=False):
+        st.caption(
+            "Creates every tab this app needs — staff, drivers, days_off, logs, vans, "
+            "and the auto-managed tabs below them — with the right headers, so a fresh "
+            "Google Sheet works immediately. Only ever creates a tab that's missing; "
+            "never touches or overwrites one that already exists, so this is safe to "
+            "run again later if you add a tab by hand and want the rest double-checked."
+        )
+        if st.button("Create Any Missing Tabs", key="bootstrap_sheets_btn"):
+            try:
+                with st.spinner("Checking the spreadsheet and creating any missing tabs..."):
+                    created = bootstrap_new_camp_sheets()
+                if created:
+                    st.success(f"Created: {', '.join(created)}. Add staff names/PINs to the staff tab to get started.")
+                else:
+                    st.info("Every tab already exists — nothing to create.")
+            except Exception:
+                st.error("Could not check/create tabs right now. Please try again.")
 
     # -------------------------------------------------
     # CAMPWIDE EMERGENCY: the most urgent control on this page, so it sits
