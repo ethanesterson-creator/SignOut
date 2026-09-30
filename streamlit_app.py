@@ -173,6 +173,37 @@ APP_CSS = f"""
     --cloud: {CLOUD};
     --line: {LINE};
     --mist: {MIST};
+
+    /* Status colors: the same 3 meanings (in/active, late/forgot, danger)
+       were previously repeated as ~20 separate hex literals below. Naming
+       them once here means a future "does this pass contrast" check or
+       per-camp accent has one place to look, not twenty. */
+    --success: #2E7D32;
+    --success-bg: #E7F4EA;
+    --success-strong: #1B5E20;
+    --warning: #B07A1E;
+    --warning-bg: #FBF3E4;
+    --warning-strong: #6B4A0F;
+    --danger: #B3261E;
+    --danger-bg: #FDECEC;
+    --danger-strong: #7A1620;
+    --neutral-bg: #EAF0F7;
+    --neutral-border: #C6D2E1;
+    --neutral-strong: #1B2A45;
+
+    /* One radius for cards/containers, one for pills. Previously 8/12/14px
+       were mixed with no rule. */
+    --radius-card: 10px;
+    --radius-pill: 999px;
+
+    /* 4px-based spacing scale. Applied to layout-level paddings/margins
+       below; small decorative badge/chip paddings are left as tuned. */
+    --space-1: 0.25rem;
+    --space-2: 0.5rem;
+    --space-3: 0.75rem;
+    --space-4: 1rem;
+    --space-5: 1.5rem;
+    --space-6: 2rem;
 }}
 
 /* ---------- base ---------- */
@@ -183,14 +214,41 @@ APP_CSS = f"""
 }}
 
 #MainMenu, footer {{ visibility: hidden; }}
-header[data-testid="stHeader"] {{ background: transparent; }}
+/* A transparent header lets scrolled page content show through underneath
+   it (on a phone, "Deploy"/the toolbar visibly overlapped page headings).
+   Matching the page background instead keeps the toolbar's own layer but
+   makes it actually occlude what scrolls beneath it. */
+header[data-testid="stHeader"] {{ background: var(--cloud); }}
 
 /* Streamlit's default block container reserves ~96px on top and ~160px on
    the bottom - on a kiosk screen that is the difference between everything
-   fitting and needing to scroll for no real reason. */
+   fitting and needing to scroll for no real reason. Top padding must still
+   clear the header bar above (60px, position: absolute - it does not push
+   content down on its own), now that the header has an opaque background;
+   2rem alone left the page title's top few pixels sitting under it. */
 .block-container {{
-    padding-top: 2rem;
+    padding-top: 4rem;
     padding-bottom: 2rem;
+}}
+
+/* No page here should ever need horizontal scroll - it's a kiosk board and
+   an admin tool, not a wide data grid. This is a safety net on top of the
+   flex/grid fixes below, not a substitute for them. */
+.stApp {{ overflow-x: hidden; }}
+
+/* Streamlit's own st.columns() are a flex row that, by default, shrinks
+   each column toward its content's intrinsic width and then overflows
+   instead of wrapping - the direct cause of the Vans pick-buttons and the
+   Admin filter row clipping past the viewport edge below full desktop
+   width. min-width: 0 lets a flex child actually shrink; flex-wrap lets
+   the row drop to a second line instead of overflowing when it can't. */
+div[data-testid="stHorizontalBlock"] {{
+    flex-wrap: wrap;
+    row-gap: var(--space-3);
+}}
+div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {{
+    min-width: 0;
+    flex: 1 1 220px;
 }}
 
 h1, h2, h3, .stApp h1, .stApp h2, .stApp h3 {{
@@ -229,8 +287,8 @@ section[data-testid="stSidebar"] .stRadio label p {{
 /* Nav rows get real padding and a highlighted background on the active page,
    instead of a bare radio dot next to plain text. */
 section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"] {{
-    padding: 0.5rem 0.7rem;
-    border-radius: 8px;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-card);
     margin-bottom: 0.1rem;
     transition: background 0.12s ease;
 }}
@@ -242,7 +300,7 @@ section[data-testid="stSidebar"] hr {{
 }}
 section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     background: var(--navy-soft);
-    border-radius: 10px;
+    border-radius: var(--radius-card);
     border: none;
 }}
 
@@ -253,12 +311,12 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     background: var(--navy);
     color: {WHITE};
     border: none;
-    border-radius: 8px;
+    border-radius: var(--radius-card);
     font-family: 'Archivo', sans-serif;
     font-weight: 700;
     font-size: 1.02rem;
     letter-spacing: 0.02em;
-    padding: 0.7rem 1.5rem;
+    padding: var(--space-3) var(--space-5);
     min-height: 44px;
     transition: background 0.12s ease, transform 0.08s ease;
 }}
@@ -276,7 +334,7 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     background: {WHITE};
     color: var(--navy);
     border: 1.5px solid var(--navy);
-    border-radius: 8px;
+    border-radius: var(--radius-card);
     font-weight: 700;
     min-height: 44px;
 }}
@@ -291,7 +349,7 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
 .stSelectbox [data-baseweb="select"] > div,
 .stMultiSelect [data-baseweb="select"] > div {{
     background: {WHITE};
-    border-radius: 8px;
+    border-radius: var(--radius-card);
     border-color: var(--line);
 }}
 
@@ -299,8 +357,8 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
 [data-testid="stForm"] {{
     background: {WHITE};
     border: 1px solid var(--line);
-    border-radius: 14px;
-    padding: 1.4rem 1.4rem 1.1rem 1.4rem;
+    border-radius: var(--radius-card);
+    padding: var(--space-5) var(--space-5) var(--space-4) var(--space-5);
 }}
 
 /* ---------- custom components ---------- */
@@ -350,7 +408,7 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #2E7D32;
+    background: var(--success);
     animation: bcLiveDotPulse 2s ease-in-out infinite;
 }}
 
@@ -364,8 +422,8 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     flex-direction: column;
     align-items: flex-start;
     gap: 0.4rem;
-    border-radius: 12px;
-    padding: 1.1rem 1.3rem;
+    border-radius: var(--radius-card);
+    padding: var(--space-4) var(--space-5);
     margin: 0.2rem 0 0.9rem 0;
 }}
 .bc-banner .bc-banner-word {{
@@ -381,7 +439,7 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     font-weight: 700;
     letter-spacing: 0.01em;
     padding: 0.22rem 0.7rem;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     max-width: 100%;
 }}
 .bc-banner .bc-banner-sub {{
@@ -403,14 +461,14 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
 .bc-banner-in {{
     background: {WHITE};
     border: 1px solid var(--line);
-    border-left: 3px solid #2E7D32;
-    color: #1B5E20;
+    border-left: 3px solid var(--success);
+    color: var(--success-strong);
 }}
 .bc-banner-in .bc-banner-word {{ color: var(--navy-deep); }}
 .bc-banner-in .bc-banner-sub {{ color: var(--mist); opacity: 1; }}
 .bc-banner-in .bc-banner-reason {{
-    background: #E7F4EA;
-    color: #1B5E20;
+    background: var(--success-bg);
+    color: var(--success-strong);
 }}
 
 /* Van picker tiles. These are the whole interface: pick the van, the app
@@ -421,9 +479,14 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     gap: 0.7rem;
     margin-bottom: 0.5rem;
 }}
+/* Belt-and-suspenders below tablet width: force a single column rather than
+   trust auto-fit's track math on a container this narrow. */
+@media (max-width: 700px) {{
+    .bc-vangrid {{ grid-template-columns: 1fr; }}
+}}
 .bc-vantile {{
-    border-radius: 14px;
-    padding: 1rem 1.1rem;
+    border-radius: var(--radius-card);
+    padding: var(--space-4) var(--space-4);
     border: 2px solid var(--line);
     background: {WHITE};
 }}
@@ -458,7 +521,7 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
 }}
 .bc-gas-unknown {{ color: #8A93A3; font-weight: 600; }}
 .bc-vantile-out .bc-gas {{ border-top-color: rgba(255,255,255,0.25); }}
-.bc-vantile-in {{ border-color: #2E7D32; background: #E7F4EA; color: #1B5E20; }}
+.bc-vantile-in {{ border-color: var(--success); background: var(--success-bg); color: var(--success-strong); }}
 .bc-vantile-out {{ background: var(--navy); border-color: var(--navy-deep); color: {WHITE}; }}
 .bc-vantile-sel {{ box-shadow: 0 0 0 4px rgba(19,41,75,0.25); }}
 
@@ -472,8 +535,8 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     100% {{ opacity: 1; transform: translateY(0); }}
 }}
 .bc-bigflash {{
-    border-radius: 14px;
-    padding: 1.1rem 1.3rem;
+    border-radius: var(--radius-card);
+    padding: var(--space-4) var(--space-4);
     margin-bottom: 0.9rem;
     animation: bcBigFlash 0.25s ease forwards;
 }}
@@ -489,7 +552,7 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     font-weight: 600;
     margin-top: 0.25rem;
 }}
-.bc-bigflash-in {{ background: #E7F4EA; border: 3px solid #2E7D32; color: #14521A; }}
+.bc-bigflash-in {{ background: var(--success-bg); border: 3px solid var(--success); color: var(--success-strong); }}
 .bc-bigflash-out {{ background: var(--navy); border: 3px solid var(--navy-deep); color: {WHITE}; }}
 .bc-bigflash-ask {{
     margin-top: 0.6rem;
@@ -502,23 +565,23 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
 
 /* Stale sign-in fork: shown only when someone out for hours enters a code. */
 .bc-fork {{
-    background: #FBF3E4;
-    border: 3px solid #B07A1E;
-    border-radius: 14px;
-    padding: 1rem 1.2rem;
+    background: var(--warning-bg);
+    border: 3px solid var(--warning);
+    border-radius: var(--radius-card);
+    padding: var(--space-4) var(--space-4);
     margin: 0.4rem 0 0.7rem 0;
 }}
 .bc-fork-head {{
     font-family: 'Archivo', sans-serif;
     font-size: 1.35rem;
     font-weight: 800;
-    color: #6B4A0F;
+    color: var(--warning-strong);
 }}
 .bc-fork-sub {{
     font-family: 'Public Sans', sans-serif;
     font-size: 1rem;
     font-weight: 600;
-    color: #7C5A1C;
+    color: var(--warning-strong);
     margin-top: 0.25rem;
 }}
 
@@ -533,7 +596,7 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
 }}
 .bc-strip-empty {{
     font-family: 'Public Sans', sans-serif;
-    color: #5A6472;
+    color: var(--mist);
     font-size: 0.95rem;
 }}
 .bc-strip {{
@@ -544,25 +607,25 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
 }}
 .bc-chip-strip {{
     display: inline-block;
-    background: #EAF0F7;
-    border: 1px solid #C6D2E1;
-    color: #1B2A45;
-    border-radius: 999px;
+    background: var(--neutral-bg);
+    border: 1px solid var(--neutral-border);
+    color: var(--neutral-strong);
+    border-radius: var(--radius-pill);
     padding: 0.28rem 0.7rem;
     font-family: 'Public Sans', sans-serif;
     font-size: 0.88rem;
     font-weight: 600;
 }}
 .bc-chip-strip-forgot {{
-    background: #FBF3E4;
-    border-color: #B07A1E;
-    color: #6B4A0F;
+    background: var(--warning-bg);
+    border-color: var(--warning);
+    color: var(--warning-strong);
 }}
 .bc-strip-forgot-label {{
     font-family: 'Archivo', sans-serif;
     font-weight: 800;
     font-size: 0.8rem;
-    color: #7C5A1C;
+    color: var(--warning-strong);
     margin: 0.35rem 0 0.3rem 0;
 }}
 
@@ -577,8 +640,8 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     background: {WHITE};
     border: 1px solid var(--line);
     border-top: 4px solid var(--navy);
-    border-radius: 12px;
-    padding: 0.95rem 1.05rem;
+    border-radius: var(--radius-card);
+    padding: var(--space-4) var(--space-4);
     box-shadow: 0 1px 3px rgba(11, 27, 51, 0.06);
 }}
 .bc-card .bc-name {{
@@ -608,7 +671,7 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     padding: 0.18rem 0.65rem;
     margin-bottom: 0.45rem;
 }}
@@ -620,15 +683,15 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
 
 /* Late: past due-back and still not signed in. */
 .bc-card.bc-card-late {{
-    background: #FDECEC;
-    border: 1px solid #B3261E;
-    border-top: 4px solid #B3261E;
+    background: var(--danger-bg);
+    border: 1px solid var(--danger);
+    border-top: 4px solid var(--danger);
 }}
-.bc-card.bc-card-late .bc-name {{ color: #7A1620; }}
+.bc-card.bc-card-late .bc-name {{ color: var(--danger-strong); }}
 .bc-card.bc-card-late .bc-meta,
-.bc-card.bc-card-late .bc-time {{ color: #8C3A33; }}
+.bc-card.bc-card-late .bc-time {{ color: var(--danger-strong); }}
 .bc-chip.bc-chip-late {{
-    background: #B3261E;
+    background: var(--danger);
     color: {WHITE};
     margin-left: 0.3rem;
 }}
@@ -636,16 +699,16 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
 /* Probably-forgot zone: muted amber, not alarming red. These need cleanup,
    not urgency, and they must not compete with someone genuinely late now. */
 .bc-card.bc-card-forgot {{
-    background: #FBF3E4;
-    border: 1px solid #B07A1E;
-    border-top: 4px solid #B07A1E;
+    background: var(--warning-bg);
+    border: 1px solid var(--warning);
+    border-top: 4px solid var(--warning);
     opacity: 0.95;
 }}
-.bc-card.bc-card-forgot .bc-name {{ color: #6B4A0F; }}
+.bc-card.bc-card-forgot .bc-name {{ color: var(--warning-strong); }}
 .bc-card.bc-card-forgot .bc-meta,
-.bc-card.bc-card-forgot .bc-time {{ color: #7C5A1C; }}
+.bc-card.bc-card-forgot .bc-time {{ color: var(--warning-strong); }}
 .bc-chip.bc-chip-forgot {{
-    background: #B07A1E;
+    background: var(--warning);
     color: {WHITE};
     margin-left: 0.3rem;
 }}
@@ -662,15 +725,15 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     font-family: 'Archivo', sans-serif;
     font-weight: 700;
     font-size: 0.95rem;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     padding: 0.35rem 1rem;
 }}
 
 .bc-van-card {{
     background: {WHITE};
     border: 1px solid var(--line);
-    border-radius: 12px;
-    padding: 1rem 1.1rem;
+    border-radius: var(--radius-card);
+    padding: var(--space-4) var(--space-4);
     box-shadow: 0 1px 3px rgba(11, 27, 51, 0.06);
 }}
 .bc-van-card.bc-van-out {{
@@ -702,7 +765,7 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     font-size: 0.7rem;
     font-weight: 800;
     letter-spacing: 0.1em;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     padding: 0.16rem 0.6rem;
     margin-bottom: 0.4rem;
 }}
@@ -719,8 +782,8 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
 .bc-empty {{
     background: {WHITE};
     border: 1px dashed var(--line);
-    border-radius: 12px;
-    padding: 1.1rem 1.2rem;
+    border-radius: var(--radius-card);
+    padding: var(--space-4) var(--space-4);
     color: var(--mist);
     font-size: 0.97rem;
 }}
@@ -732,11 +795,11 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     100% {{ opacity: 0; transform: translateY(-4px); }}
 }}
 .bc-flash {{
-    background: #E7F4EA;
-    border: 1px solid #2E7D32;
-    color: #1B5E20;
-    border-radius: 10px;
-    padding: 0.7rem 1rem;
+    background: var(--success-bg);
+    border: 1px solid var(--success);
+    color: var(--success-strong);
+    border-radius: var(--radius-card);
+    padding: var(--space-3) var(--space-4);
     font-family: 'Public Sans', sans-serif;
     font-weight: 600;
     margin-bottom: 0.6rem;
@@ -751,11 +814,11 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     50% {{ box-shadow: 0 0 0 8px rgba(179,38,30,0); }}
 }}
 .bc-emergency-banner {{
-    background: #B3261E;
+    background: var(--danger);
     color: {WHITE};
-    border-radius: 12px;
-    padding: 1rem 1.3rem;
-    margin: 0 0 1.2rem 0;
+    border-radius: var(--radius-card);
+    padding: var(--space-4) var(--space-5);
+    margin: 0 0 var(--space-5) 0;
     animation: bcEmergencyPulse 2s infinite;
 }}
 .bc-emergency-word {{
@@ -4636,14 +4699,14 @@ def page_admin_history(staff_pins: dict):
             else:
                 daily_counts = recent_out.groupby(recent_out["timestamp"].dt.date).size()
                 daily_counts.index = daily_counts.index.astype(str)
-                st.bar_chart(daily_counts)
+                st.bar_chart(daily_counts, color=NAVY)
         with col_b:
             st.caption("Top reasons (live tab)")
             reason_counts = df_out_rows["reason"].value_counts()
             if reason_counts.empty:
                 st.caption("No reasons recorded yet.")
             else:
-                st.bar_chart(reason_counts)
+                st.bar_chart(reason_counts, color=NAVY)
 
         st.caption("Late-return rate by person (3+ trips, live tab)")
         late_by_name = (
@@ -4667,7 +4730,7 @@ def page_admin_history(staff_pins: dict):
             van_out_rows = df_vans_all[df_vans_all["action"].astype(str).str.upper() == "OUT"]
             if not van_out_rows.empty:
                 st.caption("Van trips by vehicle (live tab)")
-                st.bar_chart(van_out_rows["van"].value_counts())
+                st.bar_chart(van_out_rows["van"].value_counts(), color=NAVY)
 
         weekly_cutoff = datetime.now(TZ) - timedelta(days=7)
         weekly_out = df_out_rows[df_out_rows["timestamp"] >= weekly_cutoff]
