@@ -197,15 +197,163 @@ def esc(s) -> str:
 
 
 def page_title(eyebrow: str, title: str):
-    """Page head: a huge title over a string of swaying signal pennants. The
-    context line (which board, whose office) sits at the right, never above."""
+    """Page head: a big title over a rule. The live status ticker rides on the
+    right end of that rule (see status_ticker)."""
     st.markdown(
         "<div class='sg-head'>"
-        f"<div class='sg-head-row'><div class='sg-title'>{esc(title)}</div>"
-        f"<div class='sg-head-r'>{esc(eyebrow)}</div></div>"
+        f"<div class='sg-head-row'><div class='sg-title'>{esc(title)}</div></div>"
         "</div>",
         unsafe_allow_html=True,
     )
+    status_ticker()
+
+
+TICKER_SECONDS_PER_MESSAGE = 4.5
+
+
+def build_status_messages() -> list:
+    """Live one-line facts about camp right now, as (flag kind, text) pairs.
+
+    Reads only the cached sheet loaders the boards already use, so it adds no
+    blocking network call. Anything that cannot be computed is simply skipped.
+    """
+    now = datetime.now(TZ)
+    msgs = []
+
+    active, forgot, late = [], [], []
+    try:
+        df_out = get_currently_out(merge_recent_writes(load_current_status_df_cached()))
+        for _, r in df_out.iterrows():
+            mins = row_minutes_late(r)
+            name = str(r.get("name", "")).strip()
+            if mins >= FORGOT_THRESHOLD_MINUTES:
+                forgot.append(name)
+                continue
+            active.append((name, r))
+            if mins > 0:
+                late.append((mins, name))
+    except Exception:
+        pass
+
+    def short(n):
+        parts = n.split()
+        return f"{parts[0]} {parts[-1][0]}." if len(parts) > 1 else n
+
+    if active:
+        msgs.append(("out", f"{len(active)} out now"))
+        names = [short(n) for n, _ in active]
+        shown = ", ".join(names[:3]) + (f" +{len(names) - 3}" if len(names) > 3 else "")
+        msgs.append(("out", f"Out: {shown}"))
+    else:
+        msgs.append(("in", "Everyone is in camp"))
+
+    if late:
+        late.sort(reverse=True)
+        worst = late[0]
+        msgs.append(("late", f"{len(late)} late - {short(worst[1])} {worst[0]} min"))
+
+    if forgot:
+        msgs.append(("forgot", f"{len(forgot)} with no sign-in on record"))
+
+    try:
+        longest = None
+        for n, r in active:
+            ts = r.get("timestamp")
+            ts = ts if isinstance(ts, datetime) else parse_due(ts)
+            if ts is None:
+                continue
+            if ts.tzinfo is None:
+                ts = TZ.localize(ts)
+            mins = int((now - ts).total_seconds() // 60)
+            if mins >= 0 and (longest is None or mins > longest[0]):
+                longest = (mins, n)
+        if longest and longest[0] >= 1:
+            h, m = divmod(longest[0], 60)
+            dur = f"{h}h {m:02d}m" if h else f"{m} min"
+            msgs.append(("out", f"Longest out: {short(longest[1])} {dur}"))
+    except Exception:
+        pass
+
+    try:
+        vs = compute_van_status(load_vans_df_cached())
+        out_v = [v for v in VANS if vs.get(v, {}).get("status") == "OUT"]
+        if not out_v:
+            msgs.append(("in", f"All {len(VANS)} vans at camp"))
+        elif len(out_v) == 1:
+            drv = vs[out_v[0]].get("driver", "")
+            msgs.append(("out", f"{van_label(out_v[0]).split(' (')[0]} out" + (f" - {short(drv)}" if drv else "")))
+        else:
+            msgs.append(("out", f"{len(out_v)} of {len(VANS)} vans out"))
+    except Exception:
+        pass
+
+    try:
+        k = len(get_day_off_names_today())
+        if k:
+            msgs.append(("in", f"{k} on day off today"))
+    except Exception:
+        pass
+
+    try:
+        t = now.time()
+        cur = nxt = None
+        for nm, st_t, en_t in load_schedule():
+            if st_t <= t < en_t:
+                cur = (nm, en_t)
+                break
+            if st_t > t and nxt is None:
+                nxt = (nm, st_t)
+        fmt = lambda x: datetime.combine(now.date(), x).strftime("%I:%M %p").lstrip("0")
+        if cur:
+            msgs.append(("in", f"{cur[0]} until {fmt(cur[1])}"))
+        elif nxt:
+            msgs.append(("in", f"Next: {nxt[0]} at {fmt(nxt[1])}"))
+    except Exception:
+        pass
+    return msgs
+
+
+def status_ticker():
+    """A rotating live status line on the right end of the page-head rule."""
+
+    @st.fragment(run_every=BOARD_REFRESH_SECONDS)
+    def _ticker():
+        try:
+            msgs = build_status_messages()
+        except Exception:
+            return
+        if not msgs:
+            return
+        n = len(msgs)
+        per = TICKER_SECONDS_PER_MESSAGE
+        total = per * n
+        slot = 100.0 / n
+        fade = min(slot * 0.12, 3.0)
+        kf = (
+            f"@keyframes sgTick{n}{{0%{{opacity:0;transform:translateY(10px)}}"
+            f"{fade:.2f}%{{opacity:1;transform:none}}"
+            f"{slot - fade:.2f}%{{opacity:1;transform:none}}"
+            f"{slot:.2f}%{{opacity:0;transform:translateY(-10px)}}100%{{opacity:0}}}}"
+        )
+        items = []
+        for i, (kind, text) in enumerate(msgs):
+            anim = (
+                f"animation:sgTick{n} {total:.1f}s linear {i * per:.1f}s infinite both;"
+                if n > 1
+                else "opacity:1;"
+            )
+            items.append(
+                f"<div class='sg-tick' style='{anim}'>{flag(kind, 16)}<span>{esc(text)}</span></div>"
+            )
+        st.markdown(
+            f"<style>{kf}</style><div class='sg-ticker-wrap'><div class='sg-ticker' aria-live='off'>"
+            + "".join(items)
+            + "</div></div>",
+            unsafe_allow_html=True,
+        )
+
+    _ticker()
+
 
 
 def section_title(title: str, count=None):

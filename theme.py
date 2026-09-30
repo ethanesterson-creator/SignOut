@@ -570,12 +570,29 @@ div[data-testid="stExpander"] summary p { font-weight: 600; font-size: 1rem; col
 .sg-empty span { margin-top: 2px; font-size: 0.9rem; }
 .sg-dayoff { font-size: 1.05rem; gap: 0 var(--s-3); }
 
+
+/* ---------- live status ticker: rides the right end of the head rule ---------- */
+[data-testid="stElementContainer"]:has(.sg-ticker-wrap) { height: 0; margin: 0; overflow: visible; position: relative; z-index: 3; animation: none !important; }
+.sg-ticker-wrap { position: relative; height: 0; }
+.sg-ticker { position: absolute; right: 0; top: -58px; height: 32px; width: 440px; max-width: 60vw; pointer-events: none; }
+.sg-tick {
+    position: absolute; right: 0; top: 0; height: 32px; display: flex; align-items: center; gap: 10px;
+    padding: 0 14px 0 10px; border-radius: 999px; white-space: nowrap; opacity: 0;
+    background: rgba(255,255,255,0.09); border: 1px solid var(--line-strong);
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+    font-family: var(--font-display); font-weight: 800; font-size: 1.15rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink);
+}
+.sg-tick .sg-flag { width: 24px; height: 16px; filter: none; }
+
 /* the live clock lives in an iframe pinned to the header, out of the page flow */
 [data-testid="stElementContainer"]:has(iframe) { position: fixed !important; top: 4px; right: 230px; width: 300px; height: 50px; z-index: 50; margin: 0; animation: none !important; }
 [data-testid="stElementContainer"]:has(iframe) iframe { width: 300px; height: 50px; border: 0; }
 
 /* ---------- responsive ---------- */
 @media (max-width: 900px) {
+    .sg-ticker { position: relative; top: 4px; right: auto; width: 100%; max-width: none; }
+    .sg-tick { left: 0; right: auto; }
+    [data-testid="stElementContainer"]:has(.sg-ticker-wrap) { height: 40px; }
     html { font-size: 100%; }
     .block-container, [data-testid="stMainBlockContainer"] { padding-left: 1rem; padding-right: 1rem; }
     .sg-head-row { flex-direction: column; align-items: flex-start; gap: 4px; }
@@ -602,6 +619,8 @@ div[data-testid="stExpander"] summary p { font-weight: 600; font-size: 1rem; col
     [data-testid="stElementContainer"]:has(iframe) { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
+    .sg-tick { animation: none !important; opacity: 0; }
+    .sg-tick:first-child { opacity: 1 !important; }
     .stApp::before, section[data-testid="stSidebar"]::after, .sg-sway, .sg-row, .sg-row.sg-late .sg-badge, .sg-live i,
     .sg-flash .sg-halyard .sg-flag, .sg-flash::after, .sg-title, .sg-van, .sg-inline-flash,
     [data-testid="stElementContainer"] { animation: none !important; }
