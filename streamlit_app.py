@@ -154,787 +154,8 @@ KIOSK_PAGES = {"Who's Out", "Vans"}
 # =================================================
 # THEME / CSS
 # =================================================
-# Camp Bauercrest's own crest ("BAUERCREST 1931 - for a lifetime") is a real
-# collegiate/varsity seal - navy, brass, and a confident condensed display
-# face are that world's own materials, not a generic SaaS palette wearing
-# the camp's name. Warm parchment replaces a cold clinical gray because this
-# is a kids' summer camp, not a DMV kiosk.
-NAVY = "#13294B"
-NAVY_DEEP = "#0B1B33"
-NAVY_SOFT = "#1E3A66"
-CLOUD = "#F4EFE1"
-LINE = "#DDD2B8"
-MIST = "#6B6154"
-WHITE = "#FFFFFF"
-GOLD = "#A6791A"
-GOLD_DEEP = "#7A5811"
-GOLD_BG = "#F6EBD2"
-
-APP_CSS = f"""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Public+Sans:wght@400;500;600;700&display=swap');
-
-:root {{
-    --navy: {NAVY};
-    --navy-deep: {NAVY_DEEP};
-    --navy-soft: {NAVY_SOFT};
-    --cloud: {CLOUD};
-    --line: {LINE};
-    --mist: {MIST};
-    --gold: {GOLD};
-    --gold-deep: {GOLD_DEEP};
-    --gold-bg: {GOLD_BG};
-
-    /* Status colors: the same 3 meanings (in/active, late/forgot, danger)
-       were previously repeated as ~20 separate hex literals below. Naming
-       them once here means a future "does this pass contrast" check or
-       per-camp accent has one place to look, not twenty. */
-    --success: #2E7D32;
-    --success-bg: #E7F4EA;
-    --success-strong: #1B5E20;
-    --warning: #B07A1E;
-    --warning-bg: #FBF3E4;
-    --warning-strong: #6B4A0F;
-    --danger: #B3261E;
-    --danger-bg: #FDECEC;
-    --danger-strong: #7A1620;
-    --neutral-bg: #EAF0F7;
-    --neutral-border: #C6D2E1;
-    --neutral-strong: #1B2A45;
-
-    /* One radius for cards/containers, one for pills. Previously 8/12/14px
-       were mixed with no rule. */
-    --radius-card: 10px;
-    --radius-pill: 999px;
-
-    /* 4px-based spacing scale. Applied to layout-level paddings/margins
-       below; small decorative badge/chip paddings are left as tuned. */
-    --space-1: 0.25rem;
-    --space-2: 0.5rem;
-    --space-3: 0.75rem;
-    --space-4: 1rem;
-    --space-5: 1.5rem;
-    --space-6: 2rem;
-}}
-
-/* ---------- base ---------- */
-.stApp {{
-    background: var(--cloud);
-    font-family: 'Public Sans', sans-serif;
-    color: var(--navy-deep);
-    /* One baseline for anything that doesn't set its own - most of the
-       hand-built .bc-* text below had no line-height at all and fell back
-       to the browser's tight default, while a couple of card classes had
-       already set 1.45/1.5 by hand. Big display type still overrides this
-       with its own explicit 1.1 where it needs to sit tight. */
-    line-height: 1.4;
-}}
-
-/* Text selection is a browser default that belongs to no design system
-   until it's themed - admin staff select codes/IDs/names out of the log
-   tables often enough that this is a real, not cosmetic, detail. */
-::selection {{
-    background: var(--navy-soft);
-    color: {WHITE};
-}}
-
-#MainMenu, footer {{ visibility: hidden; }}
-/* A transparent header lets scrolled page content show through underneath
-   it (on a phone, "Deploy"/the toolbar visibly overlapped page headings).
-   Matching the page background instead keeps the toolbar's own layer but
-   makes it actually occlude what scrolls beneath it. */
-header[data-testid="stHeader"] {{ background: var(--cloud); }}
-
-/* Streamlit's default block container reserves ~96px on top and ~160px on
-   the bottom - on a kiosk screen that is the difference between everything
-   fitting and needing to scroll for no real reason. Top padding must still
-   clear the header bar above (60px, position: absolute - it does not push
-   content down on its own), now that the header has an opaque background;
-   2rem alone left the page title's top few pixels sitting under it. */
-.block-container {{
-    padding-top: 4rem;
-    padding-bottom: 2rem;
-}}
-
-/* No page here should ever need horizontal scroll - it's a kiosk board and
-   an admin tool, not a wide data grid. This is a safety net on top of the
-   flex/grid fixes below, not a substitute for them. */
-.stApp {{ overflow-x: hidden; }}
-
-/* Streamlit's own st.columns() are a flex row that, by default, shrinks
-   each column toward its content's intrinsic width and then overflows
-   instead of wrapping - the direct cause of the Vans pick-buttons and the
-   Admin filter row clipping past the viewport edge below full desktop
-   width. min-width: 0 lets a flex child actually shrink; flex-wrap lets
-   the row drop to a second line instead of overflowing when it can't. */
-div[data-testid="stHorizontalBlock"] {{
-    flex-wrap: wrap;
-    row-gap: var(--space-3);
-}}
-div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {{
-    min-width: 0;
-    flex: 1 1 220px;
-}}
-
-h1, h2, h3, .stApp h1, .stApp h2, .stApp h3 {{
-    font-family: 'Oswald', sans-serif;
-    color: var(--navy);
-    letter-spacing: -0.01em;
-}}
-
-/* ---------- sidebar ---------- */
-section[data-testid="stSidebar"] {{
-    background: var(--navy);
-    border-right: 4px solid var(--navy-deep);
-}}
-section[data-testid="stSidebar"] * {{
-    color: {WHITE} !important;
-}}
-section[data-testid="stSidebar"] p,
-section[data-testid="stSidebar"] label,
-section[data-testid="stSidebar"] span:not([data-testid="stIconMaterial"]),
-section[data-testid="stSidebar"] div[role="radiogroup"] {{
-    font-family: 'Public Sans', sans-serif;
-}}
-/* Streamlit icons are ligatures in the Material Symbols font.
-   Restore the icon font so names like keyboard_double_arrow_left
-   render as glyphs, not text. */
-section[data-testid="stSidebar"] [data-testid="stIconMaterial"],
-[data-testid="stIconMaterial"],
-.material-symbols-rounded,
-.material-symbols-outlined {{
-    font-family: 'Material Symbols Rounded' !important;
-}}
-section[data-testid="stSidebar"] .stRadio label p {{
-    font-size: 1.02rem;
-    font-weight: 600;
-}}
-/* Nav rows get real padding and a highlighted background on the active page,
-   instead of a bare radio dot next to plain text. */
-section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"] {{
-    padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-card);
-    border-left: 3px solid transparent;
-    margin-bottom: 0.1rem;
-    transition: background 0.12s ease, border-color 0.12s ease;
-}}
-/* The gold stripe is this app's one signature motif - the same brass that
-   rings the crest, marking which page you're standing on the way a
-   letterman jacket marks a varsity letter, not a generic active-tab tint. */
-section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has(input:checked) {{
-    background: var(--navy-soft);
-    border-left-color: var(--gold);
-}}
-section[data-testid="stSidebar"] hr {{
-    border-color: var(--navy-soft);
-}}
-section[data-testid="stSidebar"] [data-testid="stExpander"] {{
-    background: var(--navy-soft);
-    border-radius: var(--radius-card);
-    border: none;
-}}
-
-/* ---------- buttons ---------- */
-/* Sized for a touchscreen kiosk: 44px is the standard minimum comfortable tap
-   target, and this is tapped by hand as often as it's clicked with a mouse. */
-.stButton > button, .stFormSubmitButton > button {{
-    background: var(--navy);
-    color: {WHITE};
-    border: none;
-    border-radius: var(--radius-card);
-    font-family: 'Oswald', sans-serif;
-    font-weight: 700;
-    font-size: 1.02rem;
-    letter-spacing: 0.02em;
-    padding: var(--space-3) var(--space-5);
-    min-height: 44px;
-    transition: background 0.12s ease, transform 0.08s ease;
-}}
-.stButton > button:hover, .stFormSubmitButton > button:hover {{
-    background: var(--navy-soft);
-    color: {WHITE};
-}}
-/* Touchscreens have no hover state, so a tap needs its own visible feedback -
-   otherwise a counselor can't tell whether their tap actually registered. */
-.stButton > button:active, .stFormSubmitButton > button:active {{
-    background: var(--navy-deep);
-    transform: scale(0.97);
-}}
-.stDownloadButton > button {{
-    background: {WHITE};
-    color: var(--navy);
-    border: 1.5px solid var(--navy);
-    border-radius: var(--radius-card);
-    font-weight: 700;
-    min-height: 44px;
-}}
-
-/* Focus is the one state a keyboard, switch, or screen-reader user depends
-   on entirely in the admin office - it never gets removed here, and it's
-   deliberately visible rather than left to whatever the browser defaults
-   to (which vary, and can be near-invisible against the navy sidebar).
-   Streamlit's own widgets already suppress the default outline with rules
-   at this same specificity, so this must match element-for-element rather
-   than rely on a single catch-all :focus-visible selector losing that tie. */
-:focus-visible {{
-    outline: 3px solid var(--navy-soft);
-    outline-offset: 2px;
-}}
-section[data-testid="stSidebar"] :focus-visible,
-section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has(input:focus-visible) {{
-    outline: 3px solid {WHITE};
-    outline-offset: 2px;
-}}
-.stButton > button:focus-visible,
-.stFormSubmitButton > button:focus-visible,
-.stDownloadButton > button:focus-visible {{
-    outline: 3px solid var(--navy-soft);
-    outline-offset: 2px;
-}}
-.stTextInput input:focus-visible,
-.stSelectbox [data-baseweb="select"] > div:focus-within,
-.stMultiSelect [data-baseweb="select"] > div:focus-within,
-[data-testid="stTextInputRootElement"] button:focus-visible {{
-    outline: 3px solid var(--navy-soft);
-    outline-offset: 1px;
-}}
-
-/* ---------- inputs ---------- */
-/* The code box is the single most-tapped element on the kiosk, so it gets the
-   same touch-friendly sizing as buttons. */
-.stTextInput input {{
-    min-height: 44px;
-    font-size: 1.05rem;
-}}
-.stSelectbox [data-baseweb="select"] > div,
-.stMultiSelect [data-baseweb="select"] > div {{
-    background: {WHITE};
-    border-radius: var(--radius-card);
-    border-color: var(--line);
-}}
-
-/* ---------- forms ---------- */
-[data-testid="stForm"] {{
-    background: {WHITE};
-    border: 1px solid var(--line);
-    border-radius: var(--radius-card);
-    padding: var(--space-5) var(--space-5) var(--space-4) var(--space-5);
-}}
-
-/* ---------- custom components ---------- */
-.bc-pagetitle {{
-    font-family: 'Oswald', sans-serif;
-    font-size: 2.4rem;
-    font-weight: 700;
-    letter-spacing: 0.01em;
-    color: var(--navy);
-    margin: 0 0 0.5rem 0;
-    line-height: 1.05;
-}}
-/* Every page carries a second, quieter line of context (which board, whose
-   office) - a small brass tag under the headline instead of a stacked gray
-   label above it, so the title itself carries the weight instead of
-   leaning on a kicker to introduce it. */
-.bc-pagetag {{
-    display: inline-block;
-    font-family: 'Public Sans', sans-serif;
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--gold-deep);
-    background: var(--gold-bg);
-    border: 1px solid var(--gold);
-    border-radius: var(--radius-pill);
-    padding: 0.22rem 0.75rem;
-    margin: 0 0 1.3rem 0;
-}}
-.bc-sectiontitle {{
-    font-family: 'Oswald', sans-serif;
-    font-size: 1.15rem;
-    font-weight: 700;
-    color: var(--navy);
-    margin: 0 0 0.7rem 0;
-}}
-
-/* Live-board freshness indicator: a small pulsing dot plus a timestamp, so a
-   counselor glancing at the kiosk can trust the board without wondering when
-   it last checked in. */
-@keyframes bcLiveDotPulse {{
-    0%, 100% {{ opacity: 1; }}
-    50% {{ opacity: 0.35; }}
-}}
-.bc-liveclock {{
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    margin: -0.6rem 0 1rem 0;
-    font-family: 'Public Sans', sans-serif;
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: var(--mist);
-}}
-.bc-liveclock-dot {{
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--success);
-    animation: bcLiveDotPulse 2s ease-in-out infinite;
-}}
-
-/* Big, unmistakable section banners. Counselors read these from a step away,
-   so nobody signs a van out when they meant to sign one in. The headline word
-   is always short and fixed ("SIGNING OUT"); any variable-length detail (a
-   reason, a typed note) lives in its own smaller pill line below, so it can
-   never break the headline into an awkward multi-line wrap. */
-.bc-banner {{
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.4rem;
-    border-radius: var(--radius-card);
-    padding: var(--space-4) var(--space-5);
-    margin: 0.2rem 0 0.9rem 0;
-}}
-.bc-banner .bc-banner-word {{
-    font-family: 'Oswald', sans-serif;
-    font-size: 1.55rem;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    line-height: 1.15;
-}}
-.bc-banner .bc-banner-reason {{
-    font-family: 'Public Sans', sans-serif;
-    font-size: 0.9rem;
-    font-weight: 700;
-    letter-spacing: 0.01em;
-    padding: 0.22rem 0.7rem;
-    border-radius: var(--radius-pill);
-    max-width: 100%;
-}}
-.bc-banner .bc-banner-sub {{
-    font-family: 'Public Sans', sans-serif;
-    font-size: 0.85rem;
-    font-weight: 500;
-    opacity: 0.8;
-}}
-.bc-banner-out {{
-    background: var(--navy);
-    color: {WHITE};
-}}
-.bc-banner-out .bc-banner-word,
-.bc-banner-out .bc-banner-sub {{ color: {WHITE}; }}
-.bc-banner-out .bc-banner-reason {{
-    background: {WHITE};
-    color: var(--navy);
-}}
-.bc-banner-in {{
-    background: {WHITE};
-    border: 1px solid var(--line);
-    border-left: 3px solid var(--success);
-    color: var(--success-strong);
-}}
-.bc-banner-in .bc-banner-word {{ color: var(--navy-deep); }}
-.bc-banner-in .bc-banner-sub {{ color: var(--mist); opacity: 1; }}
-.bc-banner-in .bc-banner-reason {{
-    background: var(--success-bg);
-    color: var(--success-strong);
-}}
-
-/* Van picker tiles. These are the whole interface: pick the van, the app
-   decides whether you are taking it or returning it. */
-.bc-vangrid {{
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-    gap: 0.7rem;
-    margin-bottom: 0.5rem;
-}}
-/* Belt-and-suspenders below tablet width: force a single column rather than
-   trust auto-fit's track math on a container this narrow. */
-@media (max-width: 700px) {{
-    .bc-vangrid {{ grid-template-columns: 1fr; }}
-}}
-.bc-vantile {{
-    border-radius: var(--radius-card);
-    padding: var(--space-4) var(--space-4);
-    border: 2px solid var(--line);
-    background: {WHITE};
-}}
-.bc-vantile-state {{
-    font-family: 'Oswald', sans-serif;
-    font-size: 0.7rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    opacity: 0.85;
-}}
-.bc-vantile-name {{
-    font-family: 'Oswald', sans-serif;
-    font-size: 1.35rem;
-    font-weight: 700;
-    margin: 0.15rem 0 0.1rem 0;
-}}
-.bc-vantile-who {{ font-size: 0.92rem; font-weight: 600; opacity: 0.9; }}
-.bc-vantile-action {{ font-size: 0.85rem; margin-top: 0.35rem; opacity: 0.8; }}
-.bc-gas {{
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-top: 0.6rem;
-    padding-top: 0.5rem;
-    border-top: 1px solid rgba(120,130,150,0.3);
-}}
-.bc-gas-word {{
-    font-family: 'Oswald', sans-serif;
-    font-weight: 700;
-    font-size: 0.95rem;
-    letter-spacing: 0.01em;
-}}
-.bc-gas-unknown {{ color: #8A93A3; font-weight: 600; }}
-.bc-vantile-out .bc-gas {{ border-top-color: rgba(255,255,255,0.25); }}
-.bc-vantile-in {{ border-color: var(--success); background: var(--success-bg); color: var(--success-strong); }}
-.bc-vantile-out {{ background: var(--navy); border-color: var(--navy-deep); color: {WHITE}; }}
-.bc-vantile-sel {{ box-shadow: 0 0 0 4px rgba(19,41,75,0.25); }}
-
-/* Big confirmation banner. Deliberately loud: a counselor who typed their
-   code must SEE which direction they just went. Just a quick pop-in here -
-   actual removal after FLASH_DISPLAY_SECONDS is handled server-side by a
-   fragment (see flash_ticker in page_sign_in_out), which really removes the
-   element instead of leaving an invisible box holding its space open. */
-@keyframes bcBigFlash {{
-    0%   {{ opacity: 0; transform: translateY(-6px); }}
-    100% {{ opacity: 1; transform: translateY(0); }}
-}}
-.bc-bigflash {{
-    border-radius: var(--radius-card);
-    padding: var(--space-4) var(--space-4);
-    margin-bottom: 0.9rem;
-    animation: bcBigFlash 0.25s ease forwards;
-}}
-.bc-bigflash-word {{
-    font-family: 'Oswald', sans-serif;
-    font-size: 2rem;
-    font-weight: 700;
-    line-height: 1.1;
-}}
-.bc-bigflash-sub {{
-    font-family: 'Public Sans', sans-serif;
-    font-size: 1.02rem;
-    font-weight: 600;
-    margin-top: 0.25rem;
-}}
-.bc-bigflash-in {{ background: var(--success-bg); border: 3px solid var(--success); color: var(--success-strong); }}
-.bc-bigflash-out {{ background: var(--navy); border: 3px solid var(--navy-deep); color: {WHITE}; }}
-.bc-bigflash-ask {{
-    margin-top: 0.6rem;
-    padding-top: 0.5rem;
-    border-top: 2px solid rgba(0,0,0,0.15);
-    font-family: 'Oswald', sans-serif;
-    font-size: 1.05rem;
-    font-weight: 700;
-}}
-
-/* Stale sign-in fork: shown only when someone out for hours enters a code. */
-.bc-fork {{
-    background: var(--warning-bg);
-    border: 3px solid var(--warning);
-    border-radius: var(--radius-card);
-    padding: var(--space-4) var(--space-4);
-    margin: 0.4rem 0 0.7rem 0;
-}}
-.bc-fork-head {{
-    font-family: 'Oswald', sans-serif;
-    font-size: 1.35rem;
-    font-weight: 700;
-    color: var(--warning-strong);
-}}
-.bc-fork-sub {{
-    font-family: 'Public Sans', sans-serif;
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--warning-strong);
-    margin-top: 0.25rem;
-}}
-
-/* Who's-out strip, right under the sign box. */
-.bc-strip-title {{
-    font-family: 'Oswald', sans-serif;
-    font-weight: 700;
-    font-size: 0.95rem;
-    color: var(--navy);
-    margin: 1.1rem 0 0.4rem 0;
-    letter-spacing: 0.02em;
-}}
-.bc-strip-empty {{
-    font-family: 'Public Sans', sans-serif;
-    color: var(--mist);
-    font-size: 0.95rem;
-}}
-.bc-strip {{
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
-    margin-bottom: 0.3rem;
-}}
-.bc-chip-strip {{
-    display: inline-block;
-    background: var(--neutral-bg);
-    border: 1px solid var(--neutral-border);
-    color: var(--neutral-strong);
-    border-radius: var(--radius-pill);
-    padding: 0.28rem 0.7rem;
-    font-family: 'Public Sans', sans-serif;
-    font-size: 0.88rem;
-    font-weight: 600;
-}}
-.bc-chip-strip-forgot {{
-    background: var(--warning-bg);
-    border-color: var(--warning);
-    color: var(--warning-strong);
-}}
-.bc-strip-forgot-label {{
-    font-family: 'Oswald', sans-serif;
-    font-weight: 700;
-    font-size: 0.8rem;
-    color: var(--warning-strong);
-    margin: 0.35rem 0 0.3rem 0;
-}}
-
-.bc-grid {{
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-    gap: 0.85rem;
-    margin-bottom: 0.5rem;
-}}
-
-.bc-card {{
-    background: {WHITE};
-    border: 1px solid var(--line);
-    border-top: 4px solid var(--navy);
-    border-radius: var(--radius-card);
-    padding: var(--space-4) var(--space-4);
-    box-shadow: 0 6px 18px rgba(11, 27, 51, 0.10);
-}}
-.bc-card .bc-name {{
-    font-family: 'Oswald', sans-serif;
-    font-size: 1.18rem;
-    font-weight: 700;
-    color: var(--navy-deep);
-    margin-bottom: 0.35rem;
-}}
-.bc-card .bc-meta {{
-    font-size: 0.92rem;
-    color: var(--mist);
-    line-height: 1.45;
-}}
-.bc-card .bc-time {{
-    font-variant-numeric: tabular-nums;
-    font-weight: 600;
-    color: var(--navy);
-}}
-
-.bc-chip {{
-    display: inline-block;
-    background: var(--navy);
-    color: {WHITE};
-    font-family: 'Oswald', sans-serif;
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    border-radius: var(--radius-pill);
-    padding: 0.18rem 0.65rem;
-    margin-bottom: 0.45rem;
-}}
-.bc-chip.bc-chip-light {{
-    background: var(--cloud);
-    color: var(--navy);
-    border: 1px solid var(--line);
-}}
-
-/* Late: past due-back and still not signed in. */
-.bc-card.bc-card-late {{
-    background: var(--danger-bg);
-    border: 1px solid var(--danger);
-    border-top: 4px solid var(--danger);
-}}
-.bc-card.bc-card-late .bc-name {{ color: var(--danger-strong); }}
-.bc-card.bc-card-late .bc-meta,
-.bc-card.bc-card-late .bc-time {{ color: var(--danger-strong); }}
-.bc-chip.bc-chip-late {{
-    background: var(--danger);
-    color: {WHITE};
-    margin-left: 0.3rem;
-}}
-
-/* Probably-forgot zone: muted amber, not alarming red. These need cleanup,
-   not urgency, and they must not compete with someone genuinely late now. */
-.bc-card.bc-card-forgot {{
-    background: var(--warning-bg);
-    border: 1px solid var(--warning);
-    border-top: 4px solid var(--warning);
-    opacity: 0.95;
-}}
-.bc-card.bc-card-forgot .bc-name {{ color: var(--warning-strong); }}
-.bc-card.bc-card-forgot .bc-meta,
-.bc-card.bc-card-forgot .bc-time {{ color: var(--warning-strong); }}
-.bc-chip.bc-chip-forgot {{
-    background: var(--warning);
-    color: {WHITE};
-    margin-left: 0.3rem;
-}}
-
-.bc-dayoff-row {{
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-}}
-.bc-dayoff {{
-    background: {WHITE};
-    border: 1.5px solid var(--navy);
-    color: var(--navy);
-    font-family: 'Oswald', sans-serif;
-    font-weight: 700;
-    font-size: 0.95rem;
-    border-radius: var(--radius-pill);
-    padding: 0.35rem 1rem;
-}}
-
-.bc-van-card {{
-    background: {WHITE};
-    border: 1px solid var(--line);
-    border-radius: var(--radius-card);
-    padding: var(--space-4) var(--space-4);
-    box-shadow: 0 6px 18px rgba(11, 27, 51, 0.10);
-}}
-.bc-van-card.bc-van-out {{
-    background: var(--navy);
-    border-color: var(--navy-deep);
-}}
-.bc-van-card .bc-van-title {{
-    font-family: 'Oswald', sans-serif;
-    font-size: 1.25rem;
-    font-weight: 700;
-    color: var(--navy);
-    margin-bottom: 0.3rem;
-}}
-.bc-van-card.bc-van-out .bc-van-title,
-.bc-van-card.bc-van-out .bc-meta {{
-    color: {WHITE};
-}}
-.bc-van-card.bc-van-out .bc-meta strong {{
-    color: {WHITE};
-}}
-.bc-van-card .bc-meta {{
-    font-size: 0.93rem;
-    color: var(--mist);
-    line-height: 1.5;
-}}
-.bc-van-status {{
-    display: inline-block;
-    font-family: 'Oswald', sans-serif;
-    font-size: 0.7rem;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    border-radius: var(--radius-pill);
-    padding: 0.16rem 0.6rem;
-    margin-bottom: 0.4rem;
-}}
-.bc-van-status.in {{
-    background: var(--cloud);
-    color: var(--navy);
-    border: 1px solid var(--line);
-}}
-.bc-van-status.out {{
-    background: {WHITE};
-    color: var(--navy);
-}}
-
-.bc-empty {{
-    background: {WHITE};
-    border: 1px dashed var(--line);
-    border-radius: var(--radius-card);
-    padding: var(--space-4) var(--space-4);
-    color: var(--mist);
-    font-size: 0.97rem;
-}}
-
-/* st.metric (Analytics KPIs) is a native widget rendered in Streamlit's
-   own default type - the one place in the Admin page where raw counts are
-   compared at a glance, so it earns the same brand face and tabular
-   alignment as every hand-built number elsewhere in the app. */
-[data-testid="stMetricValue"] {{
-    font-family: 'Oswald', sans-serif;
-    font-variant-numeric: tabular-nums;
-    color: var(--navy);
-}}
-[data-testid="stMetricLabel"] {{
-    font-family: 'Public Sans', sans-serif;
-    color: var(--mist);
-}}
-
-@keyframes bcFlashFade {{
-    0%   {{ opacity: 0; transform: translateY(-4px); }}
-    10%  {{ opacity: 1; transform: translateY(0); }}
-    75%  {{ opacity: 1; }}
-    100% {{ opacity: 0; transform: translateY(-4px); }}
-}}
-.bc-flash {{
-    background: var(--success-bg);
-    border: 1px solid var(--success);
-    color: var(--success-strong);
-    border-radius: var(--radius-card);
-    padding: var(--space-3) var(--space-4);
-    font-family: 'Public Sans', sans-serif;
-    font-weight: 600;
-    margin-bottom: 0.6rem;
-    animation: bcFlashFade 2.4s ease forwards;
-}}
-
-/* Campwide emergency banner. Shown on every page, top of screen, until an
-   admin clears it. Deliberately the loudest thing in the whole app: this is
-   the one case where being impossible to miss matters more than being calm. */
-@keyframes bcEmergencyPulse {{
-    0%, 100% {{ box-shadow: 0 0 0 0 rgba(179,38,30,0.55); }}
-    50% {{ box-shadow: 0 0 0 8px rgba(179,38,30,0); }}
-}}
-.bc-emergency-banner {{
-    background: var(--danger);
-    color: {WHITE};
-    border-radius: var(--radius-card);
-    padding: var(--space-4) var(--space-5);
-    margin: 0 0 var(--space-5) 0;
-    animation: bcEmergencyPulse 2s infinite;
-}}
-.bc-emergency-word {{
-    font-family: 'Oswald', sans-serif;
-    font-size: 1.3rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    color: {WHITE};
-}}
-.bc-emergency-msg {{
-    font-family: 'Public Sans', sans-serif;
-    font-size: 1rem;
-    font-weight: 600;
-    color: {WHITE};
-    margin-top: 0.25rem;
-    opacity: 0.96;
-}}
-
-.bc-footer {{
-    margin-top: 2.5rem;
-    padding-top: 0.8rem;
-    border-top: 1px solid var(--line);
-    font-family: 'Oswald', sans-serif;
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--mist);
-    text-align: center;
-}}
-</style>
-"""
+# The visual system (tokens, CSS, signal-flag SVGs) lives in theme.py.
+from theme import APP_CSS, flag
 
 
 def inject_css():
@@ -946,76 +167,84 @@ def esc(s) -> str:
 
 
 def page_title(eyebrow: str, title: str):
+    """Page head: the title over a hoist line. The context line (which board,
+    whose office) sits at the right of the title block, never above the title."""
     st.markdown(
-        f"<div class='bc-pagetitle'>{esc(title)}</div>"
-        f"<div class='bc-pagetag'>{esc(eyebrow)}</div>",
-        unsafe_allow_html=True,
-    )
-
-
-def section_title(title: str):
-    st.markdown(f"<div class='bc-sectiontitle'>{esc(title)}</div>", unsafe_allow_html=True)
-
-
-def live_clock_note():
-    """Small pulsing 'Live · updated at H:MM:SS' line for a self-refreshing
-    board, so a counselor can trust what they're looking at is current
-    without wondering when it last checked in."""
-    now_str = datetime.now(TZ).strftime("%I:%M:%S %p").lstrip("0")
-    st.markdown(
-        "<div class='bc-liveclock'>"
-        "<div class='bc-liveclock-dot'></div>"
-        f"<div>Live &middot; updated {esc(now_str)}</div>"
+        "<div class='sg-head'>"
+        f"<div class='sg-head-l'><span class='sg-mast'></span><div class='sg-title'>{esc(title)}</div></div>"
+        f"<div class='sg-head-r'>{esc(eyebrow)}</div>"
         "</div>",
         unsafe_allow_html=True,
     )
 
 
-def big_banner(word: str, sub: str, kind: str = "out"):
-    """Large color-coded section banner.
+def section_title(title: str, count=None):
+    badge = f"<span class='sg-count'>{esc(count)}</span>" if count is not None else ""
+    st.markdown(f"<div class='sg-section'>{esc(title)}{badge}</div>", unsafe_allow_html=True)
 
-    Navy for leaving, green for returning. The point is that a counselor
-    glancing at the screen knows which half of the page they are in without
-    reading small text.
-    """
-    cls = "bc-banner-in" if kind == "in" else "bc-banner-out"
+
+def live_clock_note():
+    """'Live, updated H:MM:SS' line for a self-refreshing board, so anyone
+    glancing at the kiosk can trust it is current."""
+    now_str = datetime.now(TZ).strftime("%I:%M:%S %p").lstrip("0")
     st.markdown(
-        f"<div class='bc-banner {cls}'>"
-        f"<div class='bc-banner-word'>{esc(word)}</div>"
-        f"<div class='bc-banner-sub'>{esc(sub)}</div>"
+        "<div class='sg-live'><i></i>"
+        f"<span>Live &middot; updated {esc(now_str)}</span></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def big_banner(word: str, sub: str, kind: str = "out"):
+    """Large section banner for the van and group steps.
+
+    Blue Peter for leaving, hollow square for returning, so a counselor knows
+    which half of the flow they are in without reading small text.
+    """
+    cls = "sg-banner-in" if kind == "in" else "sg-banner-out"
+    fl = flag("in" if kind == "in" else "out", 40)
+    st.markdown(
+        f"<div class='sg-banner {cls}'>{fl}"
+        f"<div><div class='sg-banner-word'>{esc(word)}</div>"
+        f"<div class='sg-banner-sub'>{esc(sub)}</div></div>"
         f"</div>",
         unsafe_allow_html=True,
     )
 
 
-def empty_note(text: str):
-    st.markdown(f"<div class='bc-empty'>{esc(text)}</div>", unsafe_allow_html=True)
+def empty_note(text: str, kind: str = "in"):
+    st.markdown(
+        f"<div class='sg-note'>{esc(text)}</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def flash_banner(msg: str):
-    """Inline green confirmation that fades out on its own after ~2 seconds."""
-    st.markdown(f"<div class='bc-flash'>{esc(msg)}</div>", unsafe_allow_html=True)
+    """Inline confirmation that fades out on its own after ~2 seconds."""
+    st.markdown(f"<div class='sg-inline-flash'>{esc(msg)}</div>", unsafe_allow_html=True)
 
 
 def big_flash(msg: str, kind: str = "in", word: str = "", ask: str = ""):
-    """Loud confirmation banner. Does NOT fade.
+    """Loud confirmation banner, with the hoist. Does NOT fade.
 
     A counselor who typed their code has to see which direction they went. The
     dangerous case is someone who forgot to sign in days ago, walks up meaning
-    to sign OUT, and the toggle signs them IN instead. A small green line is
-    easy to miss. This is not.
+    to sign OUT, and the toggle signs them IN instead. Signing out raises the
+    Blue Peter; signing in strikes it. The markup is identical on every tick of
+    the flash ticker, so the animation plays once and never restarts.
 
     ask is an extra line for exactly that case, telling them to type again if
     they actually meant to leave.
     """
-    cls = "bc-bigflash-in" if kind == "in" else "bc-bigflash-out"
+    cls = "sg-flash-in" if kind == "in" else "sg-flash-out"
     headline = word or ("SIGNED IN" if kind == "in" else "SIGNED OUT")
-    ask_html = f"<div class='bc-bigflash-ask'>{esc(ask)}</div>" if ask else ""
+    ask_html = f"<div class='sg-flash-ask'>{esc(ask)}</div>" if ask else ""
+    fl = flag("in" if kind == "in" else "out", 48)
     st.markdown(
-        f"<div class='bc-bigflash {cls}'>"
-        f"<div class='bc-bigflash-word'>{esc(headline)}</div>"
-        f"<div class='bc-bigflash-sub'>{esc(msg)}</div>"
-        f"{ask_html}"
+        f"<div class='sg-flash {cls}' role='status'>"
+        f"<div class='sg-halyard'>{fl}</div>"
+        f"<div><div class='sg-flash-word'>{esc(headline)}</div>"
+        f"<div class='sg-flash-sub'>{esc(msg)}</div>"
+        f"{ask_html}</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -1023,9 +252,10 @@ def big_flash(msg: str, kind: str = "in", word: str = "", ask: str = ""):
 
 def crest_footer():
     st.markdown(
-        f"<div class='bc-footer'>{esc(CAMP_NAME)} &middot; {CAMP_TAGLINE}</div>",
+        f"<div class='sg-footer'>{esc(CAMP_NAME)} &middot; {CAMP_TAGLINE}</div>",
         unsafe_allow_html=True,
     )
+
 
 # =================================================
 # SMALL UTILS
@@ -1314,11 +544,12 @@ def render_emergency_banner():
     if not is_emergency_active():
         return
     msg = get_emergency_message()
-    msg_html = f"<div class='bc-emergency-msg'>{esc(msg)}</div>" if msg else ""
+    msg_html = f"<div class='sg-emergency-msg'>{esc(msg)}</div>" if msg else ""
     st.markdown(
-        "<div class='bc-emergency-banner'>"
-        "<div class='bc-emergency-word'>&#9888; CAMPWIDE EMERGENCY IN EFFECT</div>"
-        f"{msg_html}"
+        "<div class='sg-emergency' role='alert'>"
+        f"{flag('emergency', 48)}"
+        "<div><div class='sg-emergency-word'>Campwide emergency in effect</div>"
+        f"{msg_html}</div>"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -3360,47 +2591,66 @@ def clean_other_reason(other_reason: str) -> str:
 
 
 def render_out_cards(df_out: pd.DataFrame, forgot_zone: bool = False):
-    cards = []
-    df = df_out.sort_values("timestamp")
-    for _, row in df.iterrows():
+    """The muster board: one row per person, most urgent first.
+
+    Late rows are taller and louder, forgot-to-sign-in rows stay compact and
+    calm, and everyone else is quiet. Shape (flag) carries the status, colour
+    only reinforces it.
+    """
+    entries = []
+    for _, row in df_out.iterrows():
+        mins = row_minutes_late(row)
+        entries.append((mins, row))
+    if forgot_zone:
+        entries.sort(key=lambda e: str(e[1].get("timestamp", "")))
+    else:
+        entries.sort(key=lambda e: (-max(e[0], 0), str(e[1].get("timestamp", ""))))
+
+    rows = []
+    for mins, row in entries:
         name = esc(row.get("name", ""))
         reason = esc(row.get("reason", ""))
         details = esc(clean_other_reason(row.get("other_reason", "")))
         when = esc(format_board_time(row.get("timestamp")))
+        due = effective_due_back(row.get("reason", ""), row.get("timestamp", ""))
+        due_txt = esc(format_board_time(due)) if due is not None else ""
 
-        # Late = past their due-back time and still not signed in. Recomputed
-        # from the current reason, so a reason edit in the sheet corrects it.
-        mins = row_minutes_late(row)
-        is_late = mins > 0
-
-        details_html = f"<div class='bc-meta'>{details}</div>" if details else ""
+        details_html = f"<div class='sg-detail'>{details}</div>" if details else ""
 
         if forgot_zone:
-            # A count in the thousands tells you nothing. Say what it means.
-            late_chip = "<div class='bc-chip bc-chip-forgot'>NO SIGN-IN</div>"
-            card_cls = "bc-card bc-card-forgot"
-        elif is_late:
-            late_chip = f"<div class='bc-chip bc-chip-late'>LATE {mins} MIN</div>"
-            card_cls = "bc-card bc-card-late"
+            kind, cls = "forgot", "sg-forgot"
+            status = "<span class='sg-badge'>No sign-in</span>"
+        elif mins > 0:
+            kind, cls = "late", "sg-late"
+            status = f"<span class='sg-badge'>Late {mins} min</span>"
         else:
-            late_chip = ""
-            card_cls = "bc-card"
+            kind, cls = "out", ""
+            status = (
+                f"<div class='sg-time'>{due_txt}</div><div class='sg-detail'>due back</div>"
+                if due_txt else ""
+            )
 
-        cards.append(
-            f"<div class='{card_cls}'>"
-            f"<div class='bc-chip'>{reason}</div>"
-            f"{late_chip}"
-            f"<div class='bc-name'>{name}</div>"
-            f"{details_html}"
-            f"<div class='bc-meta'>Signed out at <span class='bc-time'>{when}</span></div>"
+        rows.append(
+            f"<div class='sg-row {cls}'>"
+            f"<div class='sg-flagcell'>{flag(kind, 32)}</div>"
+            f"<div class='sg-name'>{name}</div>"
+            f"<div><div class='sg-reason'>{reason}</div>{details_html}</div>"
+            f"<div><div class='sg-time'>{when}</div></div>"
+            f"<div class='sg-status'>{status}</div>"
             f"</div>"
         )
-    st.markdown(f"<div class='bc-grid'>{''.join(cards)}</div>", unsafe_allow_html=True)
+    head = (
+        ""
+        if forgot_zone
+        else "<div class='sg-boardhead'><span></span><span>Name</span><span>Reason</span>"
+        "<span>Signed out</span><span style='text-align:right'>Status</span></div>"
+    )
+    st.markdown(f"<div class='sg-board'>{head}{''.join(rows)}</div>", unsafe_allow_html=True)
 
 
 def render_day_off_chips(names: list):
-    chips = "".join(f"<div class='bc-dayoff'>{esc(n)}</div>" for n in names)
-    st.markdown(f"<div class='bc-dayoff-row'>{chips}</div>", unsafe_allow_html=True)
+    chips = "".join(f"<span>{esc(n)}</span>" for n in names)
+    st.markdown(f"<div class='sg-dayoff'>{chips}</div>", unsafe_allow_html=True)
 
 
 def render_van_cards(status_map: dict):
@@ -3415,26 +2665,26 @@ def render_van_cards(status_map: dict):
                 purpose = f"Other: {info.get('other_purpose')}"
             passengers = info.get("passengers", "")
             passengers_html = (
-                f"<div class='bc-meta'>Passengers: {esc(passengers)}</div>" if passengers else ""
+                f"<div class='sg-van-meta'>Passengers: {esc(passengers)}</div>" if passengers else ""
             )
             cards.append(
-                f"<div class='bc-van-card bc-van-out'>"
-                f"<div class='bc-van-status out'>OUT</div>"
-                f"<div class='bc-van-title'>{esc(van_label(v))}</div>"
-                f"<div class='bc-meta'>Driver: <strong>{esc(info.get('driver', ''))}</strong></div>"
-                f"<div class='bc-meta'>Purpose: {esc(purpose)}</div>"
+                f"<div class='sg-van sg-van-out'>"
+                f"<div class='sg-van-top'><span class='sg-van-state'>Out</span>{flag('out', 28)}</div>"
+                f"<div class='sg-van-name'>{esc(van_label(v))}</div>"
+                f"<div class='sg-van-who'>Driver: {esc(info.get('driver', ''))}</div>"
+                f"<div class='sg-van-meta'>{esc(purpose)}</div>"
                 f"{passengers_html}"
                 f"</div>"
             )
         else:
             cards.append(
-                f"<div class='bc-van-card'>"
-                f"<div class='bc-van-status in'>IN</div>"
-                f"<div class='bc-van-title'>{esc(van_label(v))}</div>"
-                f"<div class='bc-meta'>Parked at camp</div>"
+                f"<div class='sg-van'>"
+                f"<div class='sg-van-top'><span class='sg-van-state'>At camp</span>{flag('in', 28)}</div>"
+                f"<div class='sg-van-name'>{esc(van_label(v))}</div>"
+                f"<div class='sg-van-meta'>Parked and available</div>"
                 f"</div>"
             )
-    st.markdown(f"<div class='bc-grid'>{''.join(cards)}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='sg-van-board'>{''.join(cards)}</div>", unsafe_allow_html=True)
 
 # =================================================
 # PAGES
@@ -3465,10 +2715,10 @@ def render_stale_fork(reason: str, other_reason: str):
     since_txt = f" since {since}" if since else " from earlier"
 
     st.markdown(
-        "<div class='bc-fork'>"
-        f"<div class='bc-fork-head'>{esc(name)} has been signed OUT{esc(since_txt)}.</div>"
-        "<div class='bc-fork-sub'>The board still shows you out. What are you doing right now?</div>"
-        "</div>",
+        f"<div class='sg-fork'>{flag('forgot', 40)}<div>"
+        f"<div class='sg-fork-head'>{esc(name)} has been signed out{esc(since_txt)}.</div>"
+        "<div class='sg-fork-sub'>The board still shows you out. What are you doing right now?</div>"
+        "</div></div>",
         unsafe_allow_html=True,
     )
     c1, c2, c3 = st.columns([2, 2, 1])
@@ -3544,9 +2794,9 @@ def whos_out_strip():
     except Exception:
         return
 
-    st.markdown("<div class='bc-strip-title'>Signed out right now</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sg-strip-title'>Signed out right now</div>", unsafe_allow_html=True)
     if df_out is None or df_out.empty:
-        st.markdown("<div class='bc-strip-empty'>Everyone is in camp.</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='sg-strip-empty'>{flag('in', 24)}Nobody is signed out.</div>", unsafe_allow_html=True)
         return
 
     forgot, active = [], []
@@ -3564,18 +2814,19 @@ def whos_out_strip():
     def chip(it, forgot_zone=False):
         label = esc(it["name"])
         detail = esc(it["other"]) if it["other"] else esc(it["reason"])
-        cls = "bc-chip-strip bc-chip-strip-forgot" if forgot_zone else "bc-chip-strip"
+        cls = "sg-chip sg-chip-forgot" if forgot_zone else "sg-chip"
         # detail is already escaped above; re-escaping tail here would turn
         # e.g. an apostrophe in a name into a literal "&amp;#39;" on screen.
-        tail = " · NO SIGN-IN" if forgot_zone else (f" · {detail}" if detail else "")
-        return f"<span class='{cls}'>{label}{tail}</span>"
+        tail = "No sign-in" if forgot_zone else detail
+        tail_html = f"<small>{tail}</small>" if tail else ""
+        return f"<span class='{cls}'>{flag('forgot' if forgot_zone else 'out', 16)}{label}{tail_html}</span>"
 
     if active:
-        st.markdown("<div class='bc-strip'>" + "".join(chip(i) for i in active) + "</div>", unsafe_allow_html=True)
+        st.markdown("<div class='sg-strip'>" + "".join(chip(i) for i in active) + "</div>", unsafe_allow_html=True)
     if forgot:
         st.markdown(
-            "<div class='bc-strip-forgot-label'>Probably forgot to sign in</div>"
-            "<div class='bc-strip'>" + "".join(chip(i, True) for i in forgot) + "</div>",
+            "<div class='sg-strip-label'>No sign-in on record</div>"
+            "<div class='sg-strip'>" + "".join(chip(i, True) for i in forgot) + "</div>",
             unsafe_allow_html=True,
         )
 
@@ -3662,22 +2913,22 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     # Two-column status row, sized 3:2 since the OUT side carries the
     # variable reason text and the IN side never needs more than one line.
     st.markdown(
-        "<div style='display:flex;gap:0.7rem;margin:0.2rem 0 0.9rem 0;align-items:stretch;'>"
-        "<div class='bc-banner bc-banner-out' style='flex:3;margin:0;'>"
-        "<div class='bc-banner-word'>SIGNING OUT</div>"
-        f"<div class='bc-banner-reason'>{esc(reason_line)}</div>"
-        "<div class='bc-banner-sub'>Not right? Change it below, then type your code</div>"
-        "</div>"
-        "<div class='bc-banner bc-banner-in' style='flex:2;margin:0;'>"
-        "<div class='bc-banner-word'>COMING BACK</div>"
-        "<div class='bc-banner-sub'>Type your code. Skip the reason</div>"
-        "</div>"
+        "<div class='sg-mode'>"
+        f"<div class='sg-mode-out'>{flag('out', 44)}<div>"
+        "<div class='sg-mode-word'>Signing out</div>"
+        f"<div class='sg-mode-reason'>{esc(reason_line)}</div>"
+        "<div class='sg-mode-sub'>Wrong reason? Change it below, then enter your code.</div>"
+        "</div></div>"
+        f"<div class='sg-mode-in'>{flag('in', 44)}<div>"
+        "<div class='sg-mode-word'>Coming back</div>"
+        "<div class='sg-mode-sub'>Enter your code. No reason needed.</div>"
+        "</div></div>"
         "</div>",
         unsafe_allow_html=True,
     )
-    st.caption("One box does both. If you are in camp you go out. If you are out you come back in.")
+    st.caption("One box does both: in camp, you go out. Out, you come back in.")
 
-    # Reason and code live in ONE card now, not two separate boxes of
+    # Reason and code live in one block now, not two separate boxes of
     # different heights side by side - that split was exactly what made the
     # page feel unbalanced, with empty space under the shorter side. Fixed
     # keys, on purpose, for the reason itself. It stays on whatever the last
@@ -3685,7 +2936,7 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     # to reset it every single time. Only the code box resets between people.
     # The banner above now names the pending reason out loud, so a counselor
     # who forgot to check it still sees it before typing their code.
-    with st.container(border=True):
+    with st.container():
         reason = st.selectbox("Reason (only used if you are signing OUT)", REASONS, key="signout_reason")
         other_reason = ""
         if reason == "Other (type reason)":
@@ -3780,8 +3031,16 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     crest_footer()
 
 
+def whos_out_empty():
+    st.markdown(
+        f"<div class='sg-empty'>{flag('in', 40)}<div>Nobody is signed out"
+        "<span>Everyone is in camp.</span></div></div>",
+        unsafe_allow_html=True,
+    )
+
+
 def page_whos_out():
-    page_title("The Big House Board", "Who's Out Right Now")
+    page_title("The Big House board", "Who's Out")
 
     @st.fragment(run_every=BOARD_REFRESH_SECONDS)
     def live_board():
@@ -3803,7 +3062,7 @@ def page_whos_out():
         # forgot to sign in, and a huge minute count buries the person who is
         # genuinely late right now. Nothing is deleted, it just moves down.
         if df_out.empty:
-            empty_note("No staff are currently signed out.")
+            whos_out_empty()
         else:
             forgot_mask = df_out.apply(
                 lambda r: row_minutes_late(r) >= FORGOT_THRESHOLD_MINUTES, axis=1
@@ -3812,22 +3071,20 @@ def page_whos_out():
             forgot = df_out[forgot_mask]
 
             if active.empty:
-                empty_note("No staff are currently signed out.")
+                whos_out_empty()
             else:
                 render_out_cards(active)
 
             if not forgot.empty:
-                st.markdown("")
-                section_title(f"Probably Forgot To Sign In ({len(forgot)})")
-                st.caption("No sign-in recorded well past their return time. An admin can clear these on the Admin page.")
+                section_title("No sign-in on record", len(forgot))
+                st.caption("Well past their return time with no sign-in. An admin can clear these on the Admin page.")
                 render_out_cards(forgot, forgot_zone=True)
 
         # Day Off board (display only). Reads the days_off sheet. The app never
         # signs anyone out automatically; this is a reminder of who is scheduled.
         day_off_names = get_day_off_names_today()
         if day_off_names:
-            st.markdown("")
-            section_title(f"Day Off Today ({datetime.now(TZ).strftime('%A')})")
+            section_title(f"Day off today, {datetime.now(TZ).strftime('%A')}")
             render_day_off_chips(day_off_names)
             st.caption("Scheduled days off from the days_off sheet. Everyone still signs out and in at the Big House.")
 
@@ -3835,7 +3092,6 @@ def page_whos_out():
         # be glanced at from across the room, so whether a van is even
         # available belongs here too, not just on the Vans page you have to
         # walk up to and tap through.
-        st.markdown("")
         section_title("Vans")
         render_van_cards(compute_van_status(load_vans_df_cached()))
 
@@ -3857,46 +3113,30 @@ def van_out_since(vans_df, van_name):
         return "", None
 
 
+# Segments lit out of 4. Shape (how many blocks) carries the reading; red/gold
+# only reinforces "low".
 GAS_LEVELS = {
-    "Full": (1.00, "#2E7D32"),
-    "3/4": (0.75, "#4C9A2A"),
-    "Half": (0.50, "#C7A008"),
-    "1/4": (0.25, "#D08114"),
-    "Low / Empty": (0.10, "#B3261E"),
+    "Full": 4,
+    "3/4": 3,
+    "Half": 2,
+    "1/4": 1,
+    "Low / Empty": 0,
 }
 
 
 def gas_tank_svg(level_word: str) -> str:
-    """A little gas-tank graphic filled to match the recorded level.
-
-    The fill height and color both track the word, so the reading is obvious at
-    a glance: green and full up top, red and near-empty at the bottom.
-    """
+    """A four-segment fuel meter. No reading recorded means no row at all, so a
+    van that has never been logged does not carry a dead placeholder."""
     word = str(level_word or "").strip()
     if word not in GAS_LEVELS:
-        # Unknown or never recorded.
-        return (
-            "<div class='bc-gas'>"
-            "<svg width='34' height='46' viewBox='0 0 34 46'>"
-            "<rect x='4' y='6' width='26' height='36' rx='4' fill='none' "
-            "stroke='#B9C0CC' stroke-width='2'/>"
-            "</svg>"
-            "<div class='bc-gas-word bc-gas-unknown'>No reading</div>"
-            "</div>"
-        )
-    frac, color = GAS_LEVELS[word]
-    inner_h = 32.0
-    fill_h = max(2.0, inner_h * frac)
-    fill_y = 8.0 + (inner_h - fill_h)
+        return ""
+    lit = GAS_LEVELS[word]
+    low = " low" if lit <= 1 else ""
+    segs = "".join(f"<i class='{'on' if i < lit else ''}'></i>" for i in range(4))
     return (
-        "<div class='bc-gas'>"
-        "<svg width='34' height='46' viewBox='0 0 34 46'>"
-        f"<rect x='5' y='8' width='24' height='{inner_h}' rx='3' fill='#0f1b30' opacity='0.10'/>"
-        f"<rect x='5' y='{fill_y:.1f}' width='24' height='{fill_h:.1f}' rx='3' fill='{color}'/>"
-        "<rect x='4' y='6' width='26' height='36' rx='4' fill='none' stroke='#3A4A63' stroke-width='2'/>"
-        "<rect x='24' y='2' width='7' height='6' rx='1.5' fill='#3A4A63'/>"
-        "</svg>"
-        f"<div class='bc-gas-word' style='color:{color};'>{esc(word)}</div>"
+        "<div class='sg-gas'>"
+        f"<span class='sg-gas-seg{low}' aria-hidden='true'>{segs}</span>"
+        f"<span class='sg-gas-word'>Gas: {esc(word)}</span>"
         "</div>"
     )
 
@@ -3912,22 +3152,20 @@ def render_van_tiles(status_map: dict, selected: str = ""):
     for v in VANS:
         info = status_map.get(v, {"status": "IN"})
         out = info.get("status") == "OUT"
-        sel = " bc-vantile-sel" if v == selected else ""
-        state_cls = "bc-vantile-out" if out else "bc-vantile-in"
-        state_word = "OUT" if out else "AT CAMP"
-        action = "Tap to bring back" if out else "Tap to take out"
-        who = f"<div class='bc-vantile-who'>{esc(info.get('driver',''))}</div>" if out and info.get("driver") else ""
+        sel = " sg-van-sel" if v == selected else ""
+        state_cls = " sg-van-out" if out else ""
+        state_word = "Out" if out else "At camp"
+        who = f"<div class='sg-van-who'>Driver: {esc(info.get('driver',''))}</div>" if out and info.get("driver") else ""
         gas = gas_tank_svg(info.get("gas", ""))
         tiles.append(
-            f"<div class='bc-vantile {state_cls}{sel}'>"
-            f"<div class='bc-vantile-state'>{state_word}</div>"
-            f"<div class='bc-vantile-name'>{esc(van_label(v))}</div>"
+            f"<div class='sg-van{state_cls}{sel}'>"
+            f"<div class='sg-van-top'><span class='sg-van-state'>{state_word}</span>{flag('out' if out else 'in', 28)}</div>"
+            f"<div class='sg-van-name'>{esc(van_label(v))}</div>"
             f"{who}"
-            f"<div class='bc-vantile-action'>{action}</div>"
             f"{gas}"
             f"</div>"
         )
-    st.markdown(f"<div class='bc-vangrid'>{''.join(tiles)}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='sg-fleet'>{''.join(tiles)}</div>", unsafe_allow_html=True)
 
 
 def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
@@ -3975,16 +3213,17 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
 
     # The tiles above are the display. These buttons sit directly under them
     # and are what actually gets tapped, one per van, in the same order.
+    status_now = compute_van_status(load_vans_df_cached())
     cols = st.columns(len(VANS))
     for i, v in enumerate(VANS):
         with cols[i]:
-            if st.button(van_label(v), key=f"vanpick_{v}", use_container_width=True):
+            verb = "Bring back" if status_now.get(v, {}).get("status") == "OUT" else "Take out"
+            if st.button(f"{verb} {van_label(v)}", key=f"vanpick_{v}", use_container_width=True):
                 st.session_state["van_selected"] = v
                 st.session_state["van_selected_at"] = datetime.now(TZ)
                 st.rerun()
 
     if not selected:
-        st.divider()
         empty_note("Pick a van above to take one out or bring one back.")
         crest_footer()
         return
@@ -4195,9 +3434,9 @@ def page_group_signout(staff_pins: dict, staff_names: list):
     """
     page_title("Field Trips & Activities", "Group Sign-Out")
     st.caption(
-        "For a group leaving together without a tracked van — a field trip, a "
+        "For a group leaving together without a tracked van: a field trip, a "
         "tournament, an off-site activity. One leader signs everyone out at "
-        "once, and brings them all back the same way."
+        "once and brings them all back the same way."
     )
 
     if "group_form_nonce" not in st.session_state:
@@ -5033,7 +4272,7 @@ def ensure_headers_once():
 def _main_body():
     st.set_page_config(
         page_title=f"{CAMP_NAME} Staff Sign-Out",
-        page_icon="🏕️",
+        page_icon=str(Path(__file__).parent / "favicon.png"),
         layout="wide",
     )
     inject_css()
@@ -5141,14 +4380,11 @@ def main():
     except Exception:
         try:
             st.markdown(
-                "<div style='max-width:640px;margin:3rem auto;padding:1.6rem 1.8rem;"
-                "border-radius:14px;background:#FBF3E4;border:2px solid #B07A1E;"
-                "font-family:sans-serif;color:#6B4A0F;'>"
-                "<div style='font-size:1.4rem;font-weight:800;margin-bottom:0.4rem;'>"
-                "One moment, reconnecting</div>"
-                "<div style='font-size:1rem;'>The sign-out board had a brief hiccup talking to "
-                "its records. Tap the button to reload. Nobody's sign-in or sign-out was lost.</div>"
-                "</div>",
+                f"<div class='sg-fork' style='max-width:640px;margin:3rem auto;'>{flag('forgot', 40)}<div>"
+                "<div class='sg-fork-head'>One moment, reconnecting</div>"
+                "<div class='sg-fork-sub'>The board had a brief hiccup talking to its records. "
+                "Tap Reload. Nobody's sign-in or sign-out was lost.</div>"
+                "</div></div>",
                 unsafe_allow_html=True,
             )
             if st.button("Reload", use_container_width=True):
