@@ -1,7 +1,8 @@
 [theme]
-# Matches the tokens in theme.py: Bauercrest navy on white.
-primaryColor = "#13294B"              # navy
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#E8EDF5"  # navy tint
-textColor = "#0B1B33"                 # navy deep
+# Dark, navy-drenched. Matches the tokens in theme.py.
+base = "dark"
+primaryColor = "#FFFFFF"
+backgroundColor = "#0B1B33"
+secondaryBackgroundColor = "#13294B"
+textColor = "#FFFFFF"
 font = "sans serif"

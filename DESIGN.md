@@ -1,6 +1,8 @@
 # SignOut: the signal locker
 
-Status: **implemented** on branch `design/full-visual-revamp` (approved, with navy and white as the anchor). Tokens and CSS live in `theme.py`; render helpers in `streamlit_app.py`. Replaces the earlier collegiate / parchment system (in git history).
+Status: **v2 (immersive) implemented** on `design/v2-immersive`. v2 supersedes the light/white v1 below: the canvas is now deep navy with gradient light, film grain, glass surfaces, Big Shoulders Display + Geist type, waving cloth flags (28 sliced columns on a travelling sine wave), a swaying signal-pennant string under every title, a live header clock, staggered entrances and a larger hoist confirmation. Status-by-shape and the colour roles are unchanged. (v1 text follows and is partly outdated.)
+
+Previous status: **implemented** on branch `design/full-visual-revamp` (approved, with navy and white as the anchor). Tokens and CSS live in `theme.py`; render helpers in `streamlit_app.py`. Replaces the earlier collegiate / parchment system (in git history).
 
 Built-state notes vs. the proposal: the "out, due soon" swallowtail was not needed and was dropped; the board shows a due-back time instead. The sidebar stays (Streamlit radio) but is restyled as the rail. Text inputs use Streamlit test-ids (`stTextInputRootElement`, etc.) rather than baseweb attributes, which this Streamlit version no longer emits.
 

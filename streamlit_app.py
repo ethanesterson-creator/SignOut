@@ -99,6 +99,15 @@ def van_label(v: str) -> str:
     return VAN_LABELS.get(v, v)
 
 
+def van_name_html(v: str) -> str:
+    """'Van 1 (White)' -> big 'Van 1' with the colour as a quiet second line."""
+    label = van_label(v)
+    if " (" in label and label.endswith(")"):
+        head, tail = label.split(" (", 1)
+        return f"{html_lib.escape(head)}<small>{html_lib.escape(tail[:-1])}</small>"
+    return html_lib.escape(label)
+
+
 VAN_PURPOSES = ["Period Off", "Night Off", "Day Off", "Field Trip", "Tournament", "Other"]
 
 # Legacy tag from the old auto day-off feature. Kept only so old rows
@@ -155,11 +164,32 @@ KIOSK_PAGES = {"Who's Out", "Vans"}
 # THEME / CSS
 # =================================================
 # The visual system (tokens, CSS, signal-flag SVGs) lives in theme.py.
-from theme import APP_CSS, flag
+from theme import APP_CSS, SVG_DEFS, bunting, flag
 
 
 def inject_css():
-    st.markdown(APP_CSS, unsafe_allow_html=True)
+    st.markdown(APP_CSS + SVG_DEFS, unsafe_allow_html=True)
+
+
+def kiosk_clock():
+    """A live, ticking clock pinned to the header. Pure presentation: it runs in
+    the browser so it never triggers a Streamlit rerun."""
+    import streamlit.components.v1 as components
+
+    components.html(
+        """<style>html,body{margin:0;background:transparent;font-family:'Geist','Barlow',system-ui,sans-serif;color:#fff;text-align:right}
+        #t{font:700 40px/1 'Big Shoulders Display','Arial Narrow',sans-serif;letter-spacing:.04em;font-variant-numeric:tabular-nums;text-shadow:0 4px 24px rgba(0,0,0,.5)}
+        #d{font:500 13px/1.3 system-ui;letter-spacing:.16em;text-transform:uppercase;color:#B9C8E4;margin-top:2px}
+        #s{opacity:.6;font-size:24px}</style><div id="t"></div><div id="d"></div>
+        <script>const tz=%s;
+        const f=new Intl.DateTimeFormat('en-US',{timeZone:tz,hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true});
+        const g=new Intl.DateTimeFormat('en-US',{timeZone:tz,weekday:'long',month:'long',day:'numeric'});
+        function tick(){const n=new Date();const o={};f.formatToParts(n).forEach(x=>o[x.type]=x.value);
+          document.getElementById('t').innerHTML=o.hour+':'+o.minute+'<span id="s">:'+o.second+'</span><span style="font-size:20px;margin-left:8px;opacity:.75">'+o.dayPeriod+'</span>';
+          document.getElementById('d').textContent=g.format(n);}
+        tick();setInterval(tick,1000);</script>""" % repr(str(TZ)),
+        height=64,
+    )
 
 
 def esc(s) -> str:
@@ -167,12 +197,13 @@ def esc(s) -> str:
 
 
 def page_title(eyebrow: str, title: str):
-    """Page head: the title over a hoist line. The context line (which board,
-    whose office) sits at the right of the title block, never above the title."""
+    """Page head: a huge title over a string of swaying signal pennants. The
+    context line (which board, whose office) sits at the right, never above."""
     st.markdown(
         "<div class='sg-head'>"
-        f"<div class='sg-head-l'><span class='sg-mast'></span><div class='sg-title'>{esc(title)}</div></div>"
-        f"<div class='sg-head-r'>{esc(eyebrow)}</div>"
+        f"<div class='sg-head-row'><div class='sg-title'>{esc(title)}</div>"
+        f"<div class='sg-head-r'>{esc(eyebrow)}</div></div>"
+        f"{bunting()}"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -201,7 +232,7 @@ def big_banner(word: str, sub: str, kind: str = "out"):
     which half of the flow they are in without reading small text.
     """
     cls = "sg-banner-in" if kind == "in" else "sg-banner-out"
-    fl = flag("in" if kind == "in" else "out", 40)
+    fl = flag("in" if kind == "in" else "out", 64, wave=True)
     st.markdown(
         f"<div class='sg-banner {cls}'>{fl}"
         f"<div><div class='sg-banner-word'>{esc(word)}</div>"
@@ -238,7 +269,7 @@ def big_flash(msg: str, kind: str = "in", word: str = "", ask: str = ""):
     cls = "sg-flash-in" if kind == "in" else "sg-flash-out"
     headline = word or ("SIGNED IN" if kind == "in" else "SIGNED OUT")
     ask_html = f"<div class='sg-flash-ask'>{esc(ask)}</div>" if ask else ""
-    fl = flag("in" if kind == "in" else "out", 48)
+    fl = flag("in" if kind == "in" else "out", 92, wave=True)
     st.markdown(
         f"<div class='sg-flash {cls}' role='status'>"
         f"<div class='sg-halyard'>{fl}</div>"
@@ -547,7 +578,7 @@ def render_emergency_banner():
     msg_html = f"<div class='sg-emergency-msg'>{esc(msg)}</div>" if msg else ""
     st.markdown(
         "<div class='sg-emergency' role='alert'>"
-        f"{flag('emergency', 48)}"
+        f"{flag('emergency', 73, wave=True)}"
         "<div><div class='sg-emergency-word'>Campwide emergency in effect</div>"
         f"{msg_html}</div>"
         "</div>",
@@ -2632,7 +2663,7 @@ def render_out_cards(df_out: pd.DataFrame, forgot_zone: bool = False):
 
         rows.append(
             f"<div class='sg-row {cls}'>"
-            f"<div class='sg-flagcell'>{flag(kind, 32)}</div>"
+            f"<div class='sg-flagcell'>{flag(kind, 44)}</div>"
             f"<div class='sg-name'>{name}</div>"
             f"<div><div class='sg-reason'>{reason}</div>{details_html}</div>"
             f"<div><div class='sg-time'>{when}</div></div>"
@@ -2669,8 +2700,8 @@ def render_van_cards(status_map: dict):
             )
             cards.append(
                 f"<div class='sg-van sg-van-out'>"
-                f"<div class='sg-van-top'><span class='sg-van-state'>Out</span>{flag('out', 28)}</div>"
-                f"<div class='sg-van-name'>{esc(van_label(v))}</div>"
+                f"<div class='sg-van-top'><span class='sg-van-state'>Out</span>{flag('out', 34)}</div>"
+                f"<div class='sg-van-name'>{van_name_html(v)}</div>"
                 f"<div class='sg-van-who'>Driver: {esc(info.get('driver', ''))}</div>"
                 f"<div class='sg-van-meta'>{esc(purpose)}</div>"
                 f"{passengers_html}"
@@ -2679,8 +2710,8 @@ def render_van_cards(status_map: dict):
         else:
             cards.append(
                 f"<div class='sg-van'>"
-                f"<div class='sg-van-top'><span class='sg-van-state'>At camp</span>{flag('in', 28)}</div>"
-                f"<div class='sg-van-name'>{esc(van_label(v))}</div>"
+                f"<div class='sg-van-top'><span class='sg-van-state'>At camp</span>{flag('in', 34)}</div>"
+                f"<div class='sg-van-name'>{van_name_html(v)}</div>"
                 f"<div class='sg-van-meta'>Parked and available</div>"
                 f"</div>"
             )
@@ -2715,7 +2746,7 @@ def render_stale_fork(reason: str, other_reason: str):
     since_txt = f" since {since}" if since else " from earlier"
 
     st.markdown(
-        f"<div class='sg-fork'>{flag('forgot', 40)}<div>"
+        f"<div class='sg-fork'>{flag('forgot', 64, wave=True)}<div>"
         f"<div class='sg-fork-head'>{esc(name)} has been signed out{esc(since_txt)}.</div>"
         "<div class='sg-fork-sub'>The board still shows you out. What are you doing right now?</div>"
         "</div></div>",
@@ -2914,12 +2945,12 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     # variable reason text and the IN side never needs more than one line.
     st.markdown(
         "<div class='sg-mode'>"
-        f"<div class='sg-mode-out'>{flag('out', 44)}<div>"
+        f"<div class='sg-mode-out'>{flag('out', 100, wave=True)}<div>"
         "<div class='sg-mode-word'>Signing out</div>"
         f"<div class='sg-mode-reason'>{esc(reason_line)}</div>"
         "<div class='sg-mode-sub'>Wrong reason? Change it below, then enter your code.</div>"
         "</div></div>"
-        f"<div class='sg-mode-in'>{flag('in', 44)}<div>"
+        f"<div class='sg-mode-in'>{flag('in', 64, wave=True)}<div>"
         "<div class='sg-mode-word'>Coming back</div>"
         "<div class='sg-mode-sub'>Enter your code. No reason needed.</div>"
         "</div></div>"
@@ -3159,8 +3190,8 @@ def render_van_tiles(status_map: dict, selected: str = ""):
         gas = gas_tank_svg(info.get("gas", ""))
         tiles.append(
             f"<div class='sg-van{state_cls}{sel}'>"
-            f"<div class='sg-van-top'><span class='sg-van-state'>{state_word}</span>{flag('out' if out else 'in', 28)}</div>"
-            f"<div class='sg-van-name'>{esc(van_label(v))}</div>"
+            f"<div class='sg-van-top'><span class='sg-van-state'>{state_word}</span>{flag('out' if out else 'in', 34)}</div>"
+            f"<div class='sg-van-name'>{van_name_html(v)}</div>"
             f"{who}"
             f"{gas}"
             f"</div>"
@@ -3218,7 +3249,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
     for i, v in enumerate(VANS):
         with cols[i]:
             verb = "Bring back" if status_now.get(v, {}).get("status") == "OUT" else "Take out"
-            if st.button(f"{verb} {van_label(v)}", key=f"vanpick_{v}", use_container_width=True):
+            if st.button(f"{verb} {van_label(v).split(' (')[0]}", key=f"vanpick_{v}", use_container_width=True):
                 st.session_state["van_selected"] = v
                 st.session_state["van_selected_at"] = datetime.now(TZ)
                 st.rerun()
@@ -4276,6 +4307,7 @@ def _main_body():
         layout="wide",
     )
     inject_css()
+    kiosk_clock()
     ensure_headers_once()
 
     logo_path = Path(CAMP_LOGO_PATH)
