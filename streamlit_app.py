@@ -211,6 +211,12 @@ APP_CSS = f"""
     background: var(--cloud);
     font-family: 'Public Sans', sans-serif;
     color: var(--navy-deep);
+    /* One baseline for anything that doesn't set its own - most of the
+       hand-built .bc-* text below had no line-height at all and fell back
+       to the browser's tight default, while a couple of card classes had
+       already set 1.45/1.5 by hand. Big display type still overrides this
+       with its own explicit 1.1 where it needs to sit tight. */
+    line-height: 1.4;
 }}
 
 /* Text selection is a browser default that belongs to no design system
