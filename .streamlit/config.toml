@@ -1,10 +1,7 @@
 [theme]
 # Matches the NAVY/CLOUD/NAVY_DEEP tokens in streamlit_app.py's custom CSS.
-# This file was stuck on an old palette (#150b4f) the rest of the app moved
-# away from, which is why native widgets - st.bar_chart in particular - were
-# rendering in a color that didn't match anything else on the page.
 primaryColor = "#13294B"              # NAVY
 backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F5F7FA"  # CLOUD
+secondaryBackgroundColor = "#F4EFE1"  # CLOUD (warm parchment)
 textColor = "#0B1B33"                 # NAVY_DEEP
 font = "sans serif"

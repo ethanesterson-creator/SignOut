@@ -154,17 +154,25 @@ KIOSK_PAGES = {"Who's Out", "Vans"}
 # =================================================
 # THEME / CSS
 # =================================================
+# Camp Bauercrest's own crest ("BAUERCREST 1931 - for a lifetime") is a real
+# collegiate/varsity seal - navy, brass, and a confident condensed display
+# face are that world's own materials, not a generic SaaS palette wearing
+# the camp's name. Warm parchment replaces a cold clinical gray because this
+# is a kids' summer camp, not a DMV kiosk.
 NAVY = "#13294B"
 NAVY_DEEP = "#0B1B33"
 NAVY_SOFT = "#1E3A66"
-CLOUD = "#F5F7FA"
-LINE = "#D8DFE9"
-MIST = "#5C6B82"
+CLOUD = "#F4EFE1"
+LINE = "#DDD2B8"
+MIST = "#6B6154"
 WHITE = "#FFFFFF"
+GOLD = "#A6791A"
+GOLD_DEEP = "#7A5811"
+GOLD_BG = "#F6EBD2"
 
 APP_CSS = f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Public+Sans:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Public+Sans:wght@400;500;600;700&display=swap');
 
 :root {{
     --navy: {NAVY};
@@ -173,6 +181,9 @@ APP_CSS = f"""
     --cloud: {CLOUD};
     --line: {LINE};
     --mist: {MIST};
+    --gold: {GOLD};
+    --gold-deep: {GOLD_DEEP};
+    --gold-bg: {GOLD_BG};
 
     /* Status colors: the same 3 meanings (in/active, late/forgot, danger)
        were previously repeated as ~20 separate hex literals below. Naming
@@ -266,7 +277,7 @@ div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {{
 }}
 
 h1, h2, h3, .stApp h1, .stApp h2, .stApp h3 {{
-    font-family: 'Archivo', sans-serif;
+    font-family: 'Oswald', sans-serif;
     color: var(--navy);
     letter-spacing: -0.01em;
 }}
@@ -303,11 +314,16 @@ section[data-testid="stSidebar"] .stRadio label p {{
 section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"] {{
     padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-card);
+    border-left: 3px solid transparent;
     margin-bottom: 0.1rem;
-    transition: background 0.12s ease;
+    transition: background 0.12s ease, border-color 0.12s ease;
 }}
+/* The gold stripe is this app's one signature motif - the same brass that
+   rings the crest, marking which page you're standing on the way a
+   letterman jacket marks a varsity letter, not a generic active-tab tint. */
 section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has(input:checked) {{
     background: var(--navy-soft);
+    border-left-color: var(--gold);
 }}
 section[data-testid="stSidebar"] hr {{
     border-color: var(--navy-soft);
@@ -326,7 +342,7 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     color: {WHITE};
     border: none;
     border-radius: var(--radius-card);
-    font-family: 'Archivo', sans-serif;
+    font-family: 'Oswald', sans-serif;
     font-weight: 700;
     font-size: 1.02rem;
     letter-spacing: 0.02em;
@@ -406,27 +422,37 @@ section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has
 }}
 
 /* ---------- custom components ---------- */
-.bc-eyebrow {{
-    font-family: 'Archivo', sans-serif;
-    font-size: 0.72rem;
-    font-weight: 800;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: var(--mist);
-    margin-bottom: 0.15rem;
-}}
 .bc-pagetitle {{
-    font-family: 'Archivo', sans-serif;
-    font-size: 2rem;
-    font-weight: 800;
+    font-family: 'Oswald', sans-serif;
+    font-size: 2.4rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
     color: var(--navy);
-    margin: 0 0 1.1rem 0;
-    line-height: 1.1;
+    margin: 0 0 0.5rem 0;
+    line-height: 1.05;
+}}
+/* Every page carries a second, quieter line of context (which board, whose
+   office) - a small brass tag under the headline instead of a stacked gray
+   label above it, so the title itself carries the weight instead of
+   leaning on a kicker to introduce it. */
+.bc-pagetag {{
+    display: inline-block;
+    font-family: 'Public Sans', sans-serif;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--gold-deep);
+    background: var(--gold-bg);
+    border: 1px solid var(--gold);
+    border-radius: var(--radius-pill);
+    padding: 0.22rem 0.75rem;
+    margin: 0 0 1.3rem 0;
 }}
 .bc-sectiontitle {{
-    font-family: 'Archivo', sans-serif;
+    font-family: 'Oswald', sans-serif;
     font-size: 1.15rem;
-    font-weight: 800;
+    font-weight: 700;
     color: var(--navy);
     margin: 0 0 0.7rem 0;
 }}
@@ -471,9 +497,9 @@ section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has
     margin: 0.2rem 0 0.9rem 0;
 }}
 .bc-banner .bc-banner-word {{
-    font-family: 'Archivo', sans-serif;
+    font-family: 'Oswald', sans-serif;
     font-size: 1.55rem;
-    font-weight: 800;
+    font-weight: 700;
     letter-spacing: 0.02em;
     line-height: 1.15;
 }}
@@ -535,16 +561,16 @@ section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has
     background: {WHITE};
 }}
 .bc-vantile-state {{
-    font-family: 'Archivo', sans-serif;
+    font-family: 'Oswald', sans-serif;
     font-size: 0.7rem;
-    font-weight: 800;
+    font-weight: 700;
     letter-spacing: 0.12em;
     opacity: 0.85;
 }}
 .bc-vantile-name {{
-    font-family: 'Archivo', sans-serif;
+    font-family: 'Oswald', sans-serif;
     font-size: 1.35rem;
-    font-weight: 800;
+    font-weight: 700;
     margin: 0.15rem 0 0.1rem 0;
 }}
 .bc-vantile-who {{ font-size: 0.92rem; font-weight: 600; opacity: 0.9; }}
@@ -558,8 +584,8 @@ section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has
     border-top: 1px solid rgba(120,130,150,0.3);
 }}
 .bc-gas-word {{
-    font-family: 'Archivo', sans-serif;
-    font-weight: 800;
+    font-family: 'Oswald', sans-serif;
+    font-weight: 700;
     font-size: 0.95rem;
     letter-spacing: 0.01em;
 }}
@@ -585,9 +611,9 @@ section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has
     animation: bcBigFlash 0.25s ease forwards;
 }}
 .bc-bigflash-word {{
-    font-family: 'Archivo', sans-serif;
+    font-family: 'Oswald', sans-serif;
     font-size: 2rem;
-    font-weight: 800;
+    font-weight: 700;
     line-height: 1.1;
 }}
 .bc-bigflash-sub {{
@@ -602,9 +628,9 @@ section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has
     margin-top: 0.6rem;
     padding-top: 0.5rem;
     border-top: 2px solid rgba(0,0,0,0.15);
-    font-family: 'Archivo', sans-serif;
+    font-family: 'Oswald', sans-serif;
     font-size: 1.05rem;
-    font-weight: 800;
+    font-weight: 700;
 }}
 
 /* Stale sign-in fork: shown only when someone out for hours enters a code. */
@@ -616,9 +642,9 @@ section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has
     margin: 0.4rem 0 0.7rem 0;
 }}
 .bc-fork-head {{
-    font-family: 'Archivo', sans-serif;
+    font-family: 'Oswald', sans-serif;
     font-size: 1.35rem;
-    font-weight: 800;
+    font-weight: 700;
     color: var(--warning-strong);
 }}
 .bc-fork-sub {{
@@ -631,8 +657,8 @@ section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has
 
 /* Who's-out strip, right under the sign box. */
 .bc-strip-title {{
-    font-family: 'Archivo', sans-serif;
-    font-weight: 800;
+    font-family: 'Oswald', sans-serif;
+    font-weight: 700;
     font-size: 0.95rem;
     color: var(--navy);
     margin: 1.1rem 0 0.4rem 0;
@@ -666,8 +692,8 @@ section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has
     color: var(--warning-strong);
 }}
 .bc-strip-forgot-label {{
-    font-family: 'Archivo', sans-serif;
-    font-weight: 800;
+    font-family: 'Oswald', sans-serif;
+    font-weight: 700;
     font-size: 0.8rem;
     color: var(--warning-strong);
     margin: 0.35rem 0 0.3rem 0;
@@ -686,12 +712,12 @@ section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has
     border-top: 4px solid var(--navy);
     border-radius: var(--radius-card);
     padding: var(--space-4) var(--space-4);
-    box-shadow: 0 1px 3px rgba(11, 27, 51, 0.06);
+    box-shadow: 0 6px 18px rgba(11, 27, 51, 0.10);
 }}
 .bc-card .bc-name {{
-    font-family: 'Archivo', sans-serif;
+    font-family: 'Oswald', sans-serif;
     font-size: 1.18rem;
-    font-weight: 800;
+    font-weight: 700;
     color: var(--navy-deep);
     margin-bottom: 0.35rem;
 }}
@@ -710,7 +736,7 @@ section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has
     display: inline-block;
     background: var(--navy);
     color: {WHITE};
-    font-family: 'Archivo', sans-serif;
+    font-family: 'Oswald', sans-serif;
     font-size: 0.72rem;
     font-weight: 700;
     letter-spacing: 0.06em;
@@ -766,7 +792,7 @@ section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has
     background: {WHITE};
     border: 1.5px solid var(--navy);
     color: var(--navy);
-    font-family: 'Archivo', sans-serif;
+    font-family: 'Oswald', sans-serif;
     font-weight: 700;
     font-size: 0.95rem;
     border-radius: var(--radius-pill);
@@ -778,16 +804,16 @@ section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has
     border: 1px solid var(--line);
     border-radius: var(--radius-card);
     padding: var(--space-4) var(--space-4);
-    box-shadow: 0 1px 3px rgba(11, 27, 51, 0.06);
+    box-shadow: 0 6px 18px rgba(11, 27, 51, 0.10);
 }}
 .bc-van-card.bc-van-out {{
     background: var(--navy);
     border-color: var(--navy-deep);
 }}
 .bc-van-card .bc-van-title {{
-    font-family: 'Archivo', sans-serif;
+    font-family: 'Oswald', sans-serif;
     font-size: 1.25rem;
-    font-weight: 800;
+    font-weight: 700;
     color: var(--navy);
     margin-bottom: 0.3rem;
 }}
@@ -805,9 +831,9 @@ section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has
 }}
 .bc-van-status {{
     display: inline-block;
-    font-family: 'Archivo', sans-serif;
+    font-family: 'Oswald', sans-serif;
     font-size: 0.7rem;
-    font-weight: 800;
+    font-weight: 700;
     letter-spacing: 0.1em;
     border-radius: var(--radius-pill);
     padding: 0.16rem 0.6rem;
@@ -837,7 +863,7 @@ section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has
    compared at a glance, so it earns the same brand face and tabular
    alignment as every hand-built number elsewhere in the app. */
 [data-testid="stMetricValue"] {{
-    font-family: 'Archivo', sans-serif;
+    font-family: 'Oswald', sans-serif;
     font-variant-numeric: tabular-nums;
     color: var(--navy);
 }}
@@ -880,9 +906,9 @@ section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has
     animation: bcEmergencyPulse 2s infinite;
 }}
 .bc-emergency-word {{
-    font-family: 'Archivo', sans-serif;
+    font-family: 'Oswald', sans-serif;
     font-size: 1.3rem;
-    font-weight: 800;
+    font-weight: 700;
     letter-spacing: 0.04em;
     color: {WHITE};
 }}
@@ -899,7 +925,7 @@ section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has
     margin-top: 2.5rem;
     padding-top: 0.8rem;
     border-top: 1px solid var(--line);
-    font-family: 'Archivo', sans-serif;
+    font-family: 'Oswald', sans-serif;
     font-size: 0.72rem;
     font-weight: 700;
     letter-spacing: 0.14em;
@@ -921,8 +947,8 @@ def esc(s) -> str:
 
 def page_title(eyebrow: str, title: str):
     st.markdown(
-        f"<div class='bc-eyebrow'>{esc(eyebrow)}</div>"
-        f"<div class='bc-pagetitle'>{esc(title)}</div>",
+        f"<div class='bc-pagetitle'>{esc(title)}</div>"
+        f"<div class='bc-pagetag'>{esc(eyebrow)}</div>",
         unsafe_allow_html=True,
     )
 
