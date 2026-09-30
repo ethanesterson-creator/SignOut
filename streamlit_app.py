@@ -177,7 +177,7 @@ def kiosk_clock():
     import streamlit.components.v1 as components
 
     components.html(
-        """<style>html,body{margin:0;background:transparent;font-family:'Geist','Barlow',system-ui,sans-serif;color:#fff;text-align:right}
+        """<style>html,body{margin:0;background:transparent;font-family:'Schibsted Grotesk','Barlow',system-ui,sans-serif;color:#fff;text-align:right}
         #t{font:700 40px/1 'Big Shoulders Display','Arial Narrow',sans-serif;letter-spacing:.04em;font-variant-numeric:tabular-nums;text-shadow:0 4px 24px rgba(0,0,0,.5)}
         #d{font:500 13px/1.3 system-ui;letter-spacing:.16em;text-transform:uppercase;color:#B9C8E4;margin-top:2px}
         #s{opacity:.6;font-size:24px}</style><div id="t"></div><div id="d"></div>

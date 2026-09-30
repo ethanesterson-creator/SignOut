@@ -154,7 +154,7 @@ def bunting(width: int = 1200) -> str:
 
 APP_CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=Schibsted+Grotesk:wght@400;500;600;700&family=Red+Hat+Mono:wght@500;600&display=swap');
 
 :root {
     --bg-0: #081529;
@@ -175,8 +175,8 @@ APP_CSS = """
     --gold-ink: #3D2C00;
 
     --font-display: 'Big Shoulders Display', 'Arial Narrow', sans-serif;
-    --font-body: 'Geist', system-ui, -apple-system, sans-serif;
-    --font-mono: 'Geist Mono', ui-monospace, monospace;
+    --font-body: 'Schibsted Grotesk', system-ui, -apple-system, sans-serif;
+    --font-mono: 'Red Hat Mono', ui-monospace, monospace;
 
     --r: 16px;
     --r-sm: 10px;
