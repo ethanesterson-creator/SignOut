@@ -178,17 +178,17 @@ def kiosk_clock():
 
     components.html(
         """<style>html,body{margin:0;background:transparent;font-family:'Schibsted Grotesk','Barlow',system-ui,sans-serif;color:#fff;text-align:right}
-        #t{font:700 40px/1 'Big Shoulders Display','Arial Narrow',sans-serif;letter-spacing:.04em;font-variant-numeric:tabular-nums;text-shadow:0 4px 24px rgba(0,0,0,.5)}
-        #d{font:500 13px/1.3 system-ui;letter-spacing:.16em;text-transform:uppercase;color:#B9C8E4;margin-top:2px}
-        #s{opacity:.6;font-size:24px}</style><div id="t"></div><div id="d"></div>
+        #t{font:700 28px/1 'Big Shoulders Display','Arial Narrow',sans-serif;letter-spacing:.04em;font-variant-numeric:tabular-nums;text-shadow:0 4px 24px rgba(0,0,0,.5)}
+        #d{font:500 11px/1.3 system-ui;letter-spacing:.16em;text-transform:uppercase;color:#B9C8E4;margin-top:2px}
+        #s{opacity:.6;font-size:18px}</style><div id="t"></div><div id="d"></div>
         <script>const tz=%s;
         const f=new Intl.DateTimeFormat('en-US',{timeZone:tz,hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true});
         const g=new Intl.DateTimeFormat('en-US',{timeZone:tz,weekday:'long',month:'long',day:'numeric'});
         function tick(){const n=new Date();const o={};f.formatToParts(n).forEach(x=>o[x.type]=x.value);
-          document.getElementById('t').innerHTML=o.hour+':'+o.minute+'<span id="s">:'+o.second+'</span><span style="font-size:20px;margin-left:8px;opacity:.75">'+o.dayPeriod+'</span>';
+          document.getElementById('t').innerHTML=o.hour+':'+o.minute+'<span id="s">:'+o.second+'</span><span style="font-size:14px;margin-left:6px;opacity:.75">'+o.dayPeriod+'</span>';
           document.getElementById('d').textContent=g.format(n);}
         tick();setInterval(tick,1000);</script>""" % repr(str(TZ)),
-        height=64,
+        height=50,
     )
 
 
@@ -203,7 +203,6 @@ def page_title(eyebrow: str, title: str):
         "<div class='sg-head'>"
         f"<div class='sg-head-row'><div class='sg-title'>{esc(title)}</div>"
         f"<div class='sg-head-r'>{esc(eyebrow)}</div></div>"
-        f"{bunting()}"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -2945,19 +2944,18 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     # variable reason text and the IN side never needs more than one line.
     st.markdown(
         "<div class='sg-mode'>"
-        f"<div class='sg-mode-out'>{flag('out', 100, wave=True)}<div>"
+        f"<div class='sg-mode-out'>{flag('out', 52, wave=True)}<div>"
         "<div class='sg-mode-word'>Signing out</div>"
         f"<div class='sg-mode-reason'>{esc(reason_line)}</div>"
         "<div class='sg-mode-sub'>Wrong reason? Change it below, then enter your code.</div>"
         "</div></div>"
-        f"<div class='sg-mode-in'>{flag('in', 64, wave=True)}<div>"
+        f"<div class='sg-mode-in'>{flag('in', 40, wave=True)}<div>"
         "<div class='sg-mode-word'>Coming back</div>"
-        "<div class='sg-mode-sub'>Enter your code. No reason needed.</div>"
+        "<div class='sg-mode-sub'>Just your code. One box does both.</div>"
         "</div></div>"
         "</div>",
         unsafe_allow_html=True,
     )
-    st.caption("One box does both: in camp, you go out. Out, you come back in.")
 
     # Reason and code live in one block now, not two separate boxes of
     # different heights side by side - that split was exactly what made the
@@ -2967,7 +2965,8 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     # to reset it every single time. Only the code box resets between people.
     # The banner above now names the pending reason out loud, so a counselor
     # who forgot to check it still sees it before typing their code.
-    with st.container():
+    rc, cc = st.columns([2, 3])
+    with rc:
         reason = st.selectbox("Reason (only used if you are signing OUT)", REASONS, key="signout_reason")
         other_reason = ""
         if reason == "Other (type reason)":
@@ -2979,6 +2978,7 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
             # after every action, same as the code box.
             other_reason = st.text_input("Type your reason", key=f"signout_other_reason_{n}")
 
+    with cc:
         with st.form("signio_form", clear_on_submit=False):
             code_col, btn_col = st.columns([2, 1])
             with code_col:
@@ -3117,7 +3117,6 @@ def page_whos_out():
         if day_off_names:
             section_title(f"Day off today, {datetime.now(TZ).strftime('%A')}")
             render_day_off_chips(day_off_names)
-            st.caption("Scheduled days off from the days_off sheet. Everyone still signs out and in at the Big House.")
 
         # Van status. This board is the one screen meant to sit unattended and
         # be glanced at from across the room, so whether a van is even
