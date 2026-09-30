@@ -2235,10 +2235,30 @@ def upsert_current_status_rows(rows: list) -> bool:
                 appends.append(values)
                 append_index_by_name[name] = len(appends) - 1
 
-        if updates:
-            sheet.batch_update(updates)
-        if appends:
-            sheet.append_rows(appends)
+        # The row math above is cheap and local; the actual network calls are
+        # the only slow part, and this is where every sign-in/out, van action,
+        # and group action was spending a full extra network round trip on
+        # top of the fresh read and the logs write it already needed. Firing
+        # them on a background thread (same pattern as notify_phone) takes
+        # that round trip off the critical path the user waits on.
+        # current_status is explicitly a cache that can be fully rebuilt from
+        # logs, and remember_status() already recorded this exact write into
+        # this session's local overlay (merge_recent_writes) before this
+        # function was even called - so every read this session makes already
+        # sees the correct status immediately, regardless of when this
+        # background write actually lands on Google's side. That's the same
+        # "Google lags a write" tolerance this cache already had to build in
+        # for network lag; this just uses it on purpose instead of around it.
+        def _write():
+            try:
+                if updates:
+                    sheet.batch_update(updates)
+                if appends:
+                    sheet.append_rows(appends)
+            except Exception:
+                pass
+
+        threading.Thread(target=_write, daemon=True).start()
         clear_current_status_cache()
         return True
     except Exception:
@@ -3510,7 +3530,8 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 st.session_state["van_flash"] = f"{van_label(selected)} is back. Gas: {gas_left}.{note}"
                 st.rerun()
 
-            do_bring_back()
+            with st.spinner("One moment..."):
+                do_bring_back()
 
     # ---------------- TAKE A VAN OUT ----------------
     else:
@@ -3596,7 +3617,8 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 st.session_state["van_flash"] = f"{van_label(selected)} is out under {driver}.{camp_note}"
                 st.rerun()
 
-            do_take_out()
+            with st.spinner("One moment..."):
+                do_take_out()
 
     crest_footer()
 
@@ -3661,7 +3683,8 @@ def page_group_signout(staff_pins: dict, staff_names: list):
         purpose = info["reason"]
         big_banner(f"BRINGING BACK {leader.upper()}'S GROUP", f"Signed out for {purpose}", "in")
         if st.button("Sign This Group Back In", key="group_bring_back", use_container_width=True):
-            freed = signin_everyone_in_group(tag)
+            with st.spinner("One moment..."):
+                freed = signin_everyone_in_group(tag)
             notify_vans(f"{CAMP_NOTIFY_PREFIX}: Group IN", f"{leader}'s group ({purpose}) is back: {len(freed)} signed in.")
             st.session_state["group_form_nonce"] += 1
             st.session_state.pop("group_leader", None)
@@ -3697,7 +3720,8 @@ def page_group_signout(staff_pins: dict, staff_names: list):
             else:
                 full_party = [leader] + party
                 trip_tag = f"{GROUP_SIGNOUT_TAG}|{uuid.uuid4().hex[:8]}"
-                signed = auto_signout_for_group(full_party, purpose, other_purpose.strip(), trip_tag)
+                with st.spinner("One moment..."):
+                    signed = auto_signout_for_group(full_party, purpose, other_purpose.strip(), trip_tag)
                 ptext = other_purpose.strip() if (purpose == "Other" and other_purpose.strip()) else purpose
                 notify_vans(f"{CAMP_NOTIFY_PREFIX}: Group OUT", f"{leader} took {len(signed)} out: {ptext}")
                 st.session_state["group_form_nonce"] += 1
@@ -3849,14 +3873,15 @@ def page_admin_history(staff_pins: dict):
                 # late, recomputed from the current reason.
                 mins = row_minutes_late(row)
                 late_note = f"LATE {mins} min" if mins > 0 else ""
-                append_log_row(
-                    who,
-                    row["reason"],
-                    f"{ADMIN_SIGNIN_TAG}|{admin_name}",
-                    action="IN",
-                    status="IN",
-                    late=late_note,
-                )
+                with st.spinner("One moment..."):
+                    append_log_row(
+                        who,
+                        row["reason"],
+                        f"{ADMIN_SIGNIN_TAG}|{admin_name}",
+                        action="IN",
+                        status="IN",
+                        late=late_note,
+                    )
                 extra = f" LATE by {mins} min." if mins > 0 else ""
                 st.session_state["admin_flash"] = f"{who} signed in by {admin_name}.{extra}"
                 st.rerun()
