@@ -213,6 +213,14 @@ APP_CSS = f"""
     color: var(--navy-deep);
 }}
 
+/* Text selection is a browser default that belongs to no design system
+   until it's themed - admin staff select codes/IDs/names out of the log
+   tables often enough that this is a real, not cosmetic, detail. */
+::selection {{
+    background: var(--navy-soft);
+    color: {WHITE};
+}}
+
 #MainMenu, footer {{ visibility: hidden; }}
 /* A transparent header lets scrolled page content show through underneath
    it (on a phone, "Deploy"/the toolbar visibly overlapped page headings).
@@ -337,6 +345,36 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     border-radius: var(--radius-card);
     font-weight: 700;
     min-height: 44px;
+}}
+
+/* Focus is the one state a keyboard, switch, or screen-reader user depends
+   on entirely in the admin office - it never gets removed here, and it's
+   deliberately visible rather than left to whatever the browser defaults
+   to (which vary, and can be near-invisible against the navy sidebar).
+   Streamlit's own widgets already suppress the default outline with rules
+   at this same specificity, so this must match element-for-element rather
+   than rely on a single catch-all :focus-visible selector losing that tie. */
+:focus-visible {{
+    outline: 3px solid var(--navy-soft);
+    outline-offset: 2px;
+}}
+section[data-testid="stSidebar"] :focus-visible,
+section[data-testid="stSidebar"] .stRadio label[data-testid="stRadioOption"]:has(input:focus-visible) {{
+    outline: 3px solid {WHITE};
+    outline-offset: 2px;
+}}
+.stButton > button:focus-visible,
+.stFormSubmitButton > button:focus-visible,
+.stDownloadButton > button:focus-visible {{
+    outline: 3px solid var(--navy-soft);
+    outline-offset: 2px;
+}}
+.stTextInput input:focus-visible,
+.stSelectbox [data-baseweb="select"] > div:focus-within,
+.stMultiSelect [data-baseweb="select"] > div:focus-within,
+[data-testid="stTextInputRootElement"] button:focus-visible {{
+    outline: 3px solid var(--navy-soft);
+    outline-offset: 1px;
 }}
 
 /* ---------- inputs ---------- */
@@ -786,6 +824,20 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {{
     padding: var(--space-4) var(--space-4);
     color: var(--mist);
     font-size: 0.97rem;
+}}
+
+/* st.metric (Analytics KPIs) is a native widget rendered in Streamlit's
+   own default type - the one place in the Admin page where raw counts are
+   compared at a glance, so it earns the same brand face and tabular
+   alignment as every hand-built number elsewhere in the app. */
+[data-testid="stMetricValue"] {{
+    font-family: 'Archivo', sans-serif;
+    font-variant-numeric: tabular-nums;
+    color: var(--navy);
+}}
+[data-testid="stMetricLabel"] {{
+    font-family: 'Public Sans', sans-serif;
+    color: var(--mist);
 }}
 
 @keyframes bcFlashFade {{
