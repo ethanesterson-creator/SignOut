@@ -1,7 +1,8 @@
 [theme]
-# Matches the NAVY/CLOUD/NAVY_DEEP tokens in streamlit_app.py's custom CSS.
-primaryColor = "#13294B"              # NAVY
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F4EFE1"  # CLOUD (warm parchment)
-textColor = "#0B1B33"                 # NAVY_DEEP
+# Dark, navy-drenched. Matches the tokens in theme.py.
+base = "dark"
+primaryColor = "#FFFFFF"
+backgroundColor = "#0B1B33"
+secondaryBackgroundColor = "#13294B"
+textColor = "#FFFFFF"
 font = "sans serif"
