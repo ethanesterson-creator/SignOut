@@ -14,6 +14,8 @@ import gspread
 from gspread.exceptions import APIError, GSpreadException, WorksheetNotFound
 from google.oauth2.service_account import Credentials
 
+import livecache
+
 # =================================================
 # CAMP IDENTITY
 # =================================================
@@ -310,6 +312,16 @@ def build_status_messages() -> list:
             msgs.append(("in", f"Next: {nxt[0]} at {fmt(nxt[1])}"))
     except Exception:
         pass
+
+    # Writes are saved to Google Sheets just behind each click. If that has
+    # been stuck for a while (connection down), say so on the ticker rather
+    # than let anyone assume everything is saved.
+    try:
+        n_pending, age, _err = livecache.pending_info()
+        if n_pending and age > 45:
+            msgs.insert(0, ("late", f"Saving to Sheets is delayed - {n_pending} waiting"))
+    except Exception:
+        pass
     return msgs
 
 
@@ -549,7 +561,15 @@ def get_worksheet(name: str):
     the live sheet.
     """
     ss = get_spreadsheet()
-    return ss.worksheet(name)
+    ws = ss.worksheet(name)
+    livecache.HANDLES[name] = ws
+    return ws
+
+
+def _ws(name: str):
+    """Worksheet handle that is safe to use from background threads."""
+    h = livecache.HANDLES.get(name)
+    return h if h is not None else get_worksheet(name)
 
 
 def get_settings_sheet():
@@ -671,24 +691,35 @@ def set_setting(key: str, value: str):
             sheet.update_cell(cell.row, 2, value)
         else:
             sheet.append_row([key, value])
-        get_setting.clear()
+        # Make the new value visible on every screen right now; the next
+        # background refresh re-reads the sheet and agrees with it.
+        current = dict(_settings_map_store.get(default={}) or {})
+        current[key.strip().lower()] = str(value).strip()
+        _settings_map_store.set(current)
     except Exception:
         pass
 
 
-@st.cache_data(ttl=30)
+@livecache.cached("settings", ttl=30, max_stale=600, default=dict)
+def _settings_map():
+    df = read_sheet_df(get_settings_sheet())
+    out = {}
+    if not df.empty and "key" in df.columns and "value" in df.columns:
+        for k, v in zip(df["key"], df["value"]):
+            out[str(k).strip().lower()] = str(v).strip()
+    return out
+
+
+_settings_map_store = _settings_map.store
+
+
 def get_setting(key: str) -> str:
-    """Read any key from the settings tab. Blank if missing."""
-    try:
-        df = read_sheet_df(get_settings_sheet())
-        if df.empty or "key" not in df.columns or "value" not in df.columns:
-            return ""
-        row = df[df["key"].astype(str).str.strip().str.lower() == key.strip().lower()]
-        if row.empty:
-            return ""
-        return str(row.iloc[0]["value"]).strip()
-    except Exception:
-        return ""
+    """Read any key from the settings tab. Blank if missing. Served from
+    memory; the settings are refreshed in the background."""
+    return _settings_map().get(key.strip().lower(), "")
+
+
+get_setting.clear = lambda: _settings_map.clear()
 
 
 EMERGENCY_KEY = "emergency"
@@ -765,32 +796,34 @@ def _parse_hhmm(s: str):
     return None
 
 
-@st.cache_data(ttl=120)
-def load_schedule():
-    """Return the day's periods as [(name, start_time, end_time)], sorted.
-
-    Read from the schedule tab so the office can edit times without a code
-    change. Falls back to the built-in camp default if the tab is missing,
-    empty, or unreadable, so lateness never silently stops working.
-    """
-    try:
-        df = read_sheet_df(get_schedule_sheet())
-        periods = []
-        if not df.empty and "start" in df.columns and "end" in df.columns:
-            for _, r in df.iterrows():
-                start = _parse_hhmm(r.get("start"))
-                end = _parse_hhmm(r.get("end"))
-                nm = str(r.get("period", "")).strip()
-                if start and end:
-                    periods.append((nm, start, end))
-        if periods:
-            return sorted(periods, key=lambda p: p[1])
-    except Exception:
-        pass
+def _default_schedule():
     return sorted(
         [(n, _parse_hhmm(s), _parse_hhmm(e)) for n, s, e in DEFAULT_SCHEDULE],
         key=lambda p: p[1],
     )
+
+
+@livecache.cached("schedule", ttl=120, max_stale=3600, default=_default_schedule)
+def load_schedule():
+    """Return the day's periods as [(name, start_time, end_time)], sorted.
+
+    Read from the schedule tab so the office can edit times without a code
+    change. Falls back to the built-in camp default if the tab is empty, and
+    keeps the last good schedule if a refresh fails, so lateness never
+    silently stops working.
+    """
+    df = read_sheet_df(get_schedule_sheet())
+    periods = []
+    if not df.empty and "start" in df.columns and "end" in df.columns:
+        for _, r in df.iterrows():
+            start = _parse_hhmm(r.get("start"))
+            end = _parse_hhmm(r.get("end"))
+            nm = str(r.get("period", "")).strip()
+            if start and end:
+                periods.append((nm, start, end))
+    if periods:
+        return sorted(periods, key=lambda p: p[1])
+    return _default_schedule()
 
 
 def _next_clock_time(now: datetime, hh: int, mm: int) -> datetime:
@@ -1080,21 +1113,21 @@ def read_sheet_df(sheet) -> pd.DataFrame:
 # =================================================
 # STAFF + DRIVERS (FROM SHEETS)
 # =================================================
-@st.cache_data(ttl=30)
+def _empty_staff():
+    return pd.DataFrame(columns=["name", "pin", "active", "admin"])
+
+
+def _empty_drivers():
+    return pd.DataFrame(columns=["name", "passed_test"])
+
+
+# staff_pins loads on EVERY page render, including the Sign In/Out page. These
+# loaders RAISE on a Sheets hiccup; the store keeps the last good copy and
+# refreshes in the background, instead of caching an empty frame for a while
+# (which is what used to blank the PIN list mid-day) or blocking the page.
+@livecache.cached("staff", ttl=60, max_stale=1800, default=_empty_staff)
 def load_staff_df_cached():
-    # staff_pins loads on EVERY page render, unconditionally, including the
-    # Sign In/Out page itself - so a bare Sheets hiccup here (the exact
-    # transient failure SHEETS_TIMEOUT_SECONDS exists to survive) must not
-    # propagate as an uncaught exception. Uncaught, it would hit main()'s
-    # top-level catch-all and replace the WHOLE kiosk with the "reconnecting"
-    # screen, not just this one board, until someone manually reloads. Falling
-    # back to an empty frame here instead lets the rest of the page degrade
-    # the same way every other Sheets read in this file already does.
-    try:
-        sheet = get_worksheet(SHEET_STAFF)
-        df = read_sheet_df(sheet)
-    except Exception:
-        df = pd.DataFrame(columns=["name", "pin", "active", "admin"])
+    df = read_sheet_df(_ws(SHEET_STAFF))
     for c in ["name", "pin", "active", "admin"]:
         if c not in df.columns:
             df[c] = ""
@@ -1114,16 +1147,9 @@ def load_staff_df_cached():
     return df
 
 
-@st.cache_data(ttl=30)
+@livecache.cached("drivers", ttl=60, max_stale=1800, default=_empty_drivers)
 def load_drivers_df_cached():
-    # Same reasoning as load_staff_df_cached above: never let a Sheets hiccup
-    # here take down the whole kiosk instead of just leaving the driver list
-    # empty for this render.
-    try:
-        sheet = get_worksheet(SHEET_DRIVERS)
-        df = read_sheet_df(sheet)
-    except Exception:
-        df = pd.DataFrame(columns=["name", "passed_test"])
+    df = read_sheet_df(_ws(SHEET_DRIVERS))
     for c in ["name", "passed_test"]:
         if c not in df.columns:
             df[c] = ""
@@ -1306,25 +1332,19 @@ def clear_logs_cache():
     load_logs_df_cached.clear()
 
 
-@st.cache_data(ttl=600)
+@livecache.cached("log_headers", ttl=600, max_stale=86400, default=lambda: list(LOGS_HEADERS_REQUIRED))
 def get_log_headers():
-    """Cached logs header order. Read once, reused for every write in the
-    session, so appends do not re-read the header each time."""
-    try:
-        hdr = [h.strip() for h in get_worksheet(SHEET_LOGS).row_values(1) if str(h).strip()]
-        return hdr or list(LOGS_HEADERS_REQUIRED)
-    except Exception:
-        return list(LOGS_HEADERS_REQUIRED)
+    """Logs header order, held in memory and refreshed in the background, so a
+    write never waits on re-reading the header row."""
+    hdr = [h.strip() for h in _ws(SHEET_LOGS).row_values(1) if str(h).strip()]
+    return hdr or list(LOGS_HEADERS_REQUIRED)
 
 
-@st.cache_data(ttl=600)
+@livecache.cached("van_headers", ttl=600, max_stale=86400, default=lambda: list(VANS_HEADERS_REQUIRED))
 def get_van_headers():
-    """Cached vans header order, same idea as the logs headers."""
-    try:
-        hdr = [h.strip() for h in get_vans_sheet().row_values(1) if str(h).strip()]
-        return hdr or list(VANS_HEADERS_REQUIRED)
-    except Exception:
-        return list(VANS_HEADERS_REQUIRED)
+    """Vans header order, same idea as the logs headers."""
+    hdr = [h.strip() for h in _ws(SHEET_VANS).row_values(1) if str(h).strip()]
+    return hdr or list(VANS_HEADERS_REQUIRED)
 
 
 def notify_phone(title: str, message: str):
@@ -1396,46 +1416,32 @@ def append_log_row(name: str, reason: str, other_reason: str, action: str, statu
     this person is expected back. late is stamped on the IN row so the record
     permanently shows they came back late.
     """
-    try:
-        sheet = get_worksheet(SHEET_LOGS)
+    row_dict = {
+        "id": str(uuid.uuid4())[:8],
+        "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
+        "name": name,
+        "reason": reason,
+        "other_reason": other_reason or "",
+        "action": action,
+        "status": status,
+        "due_back": due_back.isoformat(timespec="seconds") if due_back else "",
+        "late": late or "",
+    }
+    # Instant: the click is recorded in memory and queued. The Google Sheets
+    # write (logs, then current_status) and the phone push both happen right
+    # behind it, off the path anyone is waiting on.
+    _queue_log_rows([row_dict])
 
-        row_dict = {
-            "id": str(uuid.uuid4())[:8],
-            "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
-            "name": name,
-            "reason": reason,
-            "other_reason": other_reason or "",
-            "action": action,
-            "status": status,
-            "due_back": due_back.isoformat(timespec="seconds") if due_back else "",
-            "late": late or "",
-        }
-        headers = get_log_headers()
-        row = [row_dict.get(h, "") for h in headers]
-        sheet.append_row(row)
-        clear_logs_cache()
-        remember_status(name, status, reason, other_reason)
-        # logs is the permanent record; this just keeps the fast-path status
-        # cache in step with it. Never allowed to fail the sign-in/out itself.
-        try:
-            upsert_current_status_rows([row_dict])
-        except Exception:
-            pass
+    # Sign-out shows the reason; the typed detail wins when the reason is Other.
+    if notify:
+        if action == "OUT":
+            detail = other_reason.strip() if (reason.startswith("Other") and other_reason.strip()) else reason
+            notify_phone(f"{CAMP_NOTIFY_PREFIX}: Signed OUT", f"{name}: {detail}")
+        else:
+            notify_phone(f"{CAMP_NOTIFY_PREFIX}: Signed IN", name)
 
-        # Phone push after a clean write. Sign-out shows the reason; the typed
-        # detail wins when the reason is Other.
-        if notify:
-            if action == "OUT":
-                detail = other_reason.strip() if (reason.startswith("Other") and other_reason.strip()) else reason
-                notify_phone(f"{CAMP_NOTIFY_PREFIX}: Signed OUT", f"{name}: {detail}")
-            else:
-                notify_phone(f"{CAMP_NOTIFY_PREFIX}: Signed IN", name)
-
-        # Handed back so the caller can offer an Undo on this exact row.
-        return row_dict["id"]
-    except (APIError, GSpreadException):
-        st.error("Could not record this sign-in/sign-out due to a problem talking to Google Sheets.")
-        st.stop()
+    # Handed back so the caller can offer an Undo on this exact row.
+    return row_dict["id"]
 
 
 # =================================================
@@ -1459,55 +1465,86 @@ VAN_SELECT_TIMEOUT_SECONDS = 90
 FLASH_DISPLAY_SECONDS = 5
 
 
-def delete_log_row_by_id(row_id: str) -> bool:
-    """Delete one log row by its id. True if it was removed.
+def _status_row_for(name: str, prev) -> dict:
+    """The current_status row that puts `name` back to how they were before an
+    action: their previous row, or plain IN if they had none."""
+    if prev:
+        return {
+            "name": name,
+            "status": str(prev.get("status", "IN") or "IN").strip().upper(),
+            "reason": prev.get("reason", ""),
+            "other_reason": prev.get("other_reason", ""),
+            "timestamp": prev.get("timestamp", ""),
+            "due_back": prev.get("due_back", ""),
+            "id": prev.get("id", ""),
+        }
+    return {
+        "name": name, "status": "IN", "reason": "", "other_reason": "",
+        "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
+        "due_back": "", "id": "",
+    }
+
+
+def delete_log_row_by_id(row_id: str, name: str = "", prev=None) -> bool:
+    """Undo one log row by its id. Instant: the board flips back immediately.
 
     A real delete, not a reversing entry. An accidental sign-out should vanish
     from the record, not leave a confusing OUT/IN pair that could also produce
-    a bogus lateness note.
+    a bogus lateness note. If the row's write is still waiting in the queue it
+    is simply cancelled - it never reaches the sheet at all. Otherwise a
+    delete is queued right behind it, so the order is always write-then-delete.
     """
     row_id = str(row_id or "").strip()
     if not row_id:
         return False
-    try:
-        sheet = get_worksheet(SHEET_LOGS)
+    name = str(name or "").strip()
+    restore = _status_row_for(name, prev) if name else None
+    undo_tag = f"undo:{row_id}"
+    if restore:
+        remember_status(
+            name, restore["status"], restore["reason"], restore["other_reason"],
+            timestamp=restore["timestamp"], due_back=restore["due_back"], row_id=undo_tag,
+        )
+
+    if livecache.cancel(row_id):
+        # Never written, so the sheet already shows the "before" state.
+        if restore:
+            livecache.recent_confirm(name, undo_tag)
+        return True
+
+    def job(attempt):
+        sheet = _ws(SHEET_LOGS)
         headers = get_log_headers()
         id_col = (headers.index("id") + 1) if "id" in headers else 1
-
         # Search the id COLUMN only. A whole-sheet search could land on the
-        # same string sitting in another column (a typed reason, a note) and
-        # then either delete the wrong row or refuse and quietly do nothing.
-        try:
-            cell = sheet.find(row_id, in_column=id_col)
-        except TypeError:
-            cell = sheet.find(row_id)
-            if cell and cell.col != id_col:
-                cell = None
+        # same string sitting in another column (a typed reason, a note).
+        ids = sheet.col_values(id_col)
+        if row_id in ids:
+            sheet.delete_rows(ids.index(row_id) + 1)
+            try:
+                load_logs_df_cached.clear()
+            except Exception:
+                pass
+        if restore:
+            upsert_current_status_rows([restore])
+            livecache.recent_confirm(name, undo_tag)
+        _current_status_raw.store.invalidate(kick=True)
 
-        if not cell or cell.col != id_col:
-            return False
-
-        sheet.delete_rows(cell.row)
-        clear_logs_cache()
-        # This bypasses append_log_row, so current_status was never told about
-        # it. A deleted row can be someone's latest, so rebuild rather than
-        # leave the fast-path cache pointing at a row that no longer exists.
-        try:
-            rebuild_current_status_from_logs()
-        except Exception:
-            pass
-        return True
-    except Exception:
-        return False
+    livecache.submit(job)
+    return True
 
 
-def set_pending_undo(row_id: str, desc: str):
-    """Remember the action just taken, so it can be undone for a short window."""
+def set_pending_undo(row_id: str, desc: str, name: str = "", prev=None):
+    """Remember the action just taken, so it can be undone for a short window.
+    `name` and `prev` (their status before the action) let the undo put the
+    board back exactly as it was."""
     if not row_id:
         return
     st.session_state["undo_action"] = {
         "id": row_id,
         "desc": desc,
+        "name": name,
+        "prev": prev,
         "at": datetime.now(TZ),
     }
 
@@ -1529,6 +1566,7 @@ def get_pending_undo():
 
 
 def clear_all_logs():
+    livecache.drain(8)  # don't let a queued write land after the wipe
     try:
         sheet = get_worksheet(SHEET_LOGS)
         sheet.clear()
@@ -1581,6 +1619,7 @@ def delete_logs_by_ids(ids_to_delete):
     if not ids_to_delete:
         return
 
+    livecache.drain(8)  # queued sign-in/outs must be in the sheet to be found
     try:
         sheet = get_worksheet(SHEET_LOGS)
         all_vals = sheet.get_all_values()
@@ -1787,6 +1826,7 @@ def archive_old_logs():
          the board still works. It fails safe, never with data loss.
     """
     result = {"ok": False, "archived": 0, "kept": 0, "message": ""}
+    livecache.drain(10)  # queued sign-in/outs must reach the sheet first
     try:
         live = get_worksheet(SHEET_LOGS)
         all_vals = live.get_all_values()
@@ -1810,7 +1850,7 @@ def archive_old_logs():
     # slower full-history scan (out_names=None) if it is not available for any
     # reason. Archiving safety must never depend on this cache being correct.
     try:
-        clear_current_status_cache()
+        _current_status_raw.store.refresh_now()
         fast_out_names = set(
             get_currently_out(load_current_status_df_cached())["name"]
             .astype(str).str.strip().tolist()
@@ -1942,6 +1982,7 @@ def archive_old_vans():
     archive_old_logs for the full reasoning.
     """
     result = {"ok": False, "archived": 0, "kept": 0, "message": ""}
+    livecache.drain(10)  # queued van rows must reach the sheet first
     try:
         live = get_vans_sheet()
         all_vals = live.get_all_values()
@@ -2128,14 +2169,13 @@ def get_current_status_sheet():
         return sheet
 
 
-@st.cache_data(ttl=5)
-def load_current_status_df_cached():
-    try:
-        sheet = get_current_status_sheet()
-        df = read_sheet_df(sheet)
-    except Exception:
-        return pd.DataFrame(columns=CURRENT_STATUS_HEADERS)
+def _empty_status():
+    return pd.DataFrame(columns=CURRENT_STATUS_HEADERS)
 
+
+@livecache.cached("current_status", ttl=6, max_stale=45, default=_empty_status)
+def _current_status_raw():
+    df = read_sheet_df(_ws(SHEET_CURRENT_STATUS))
     for c in CURRENT_STATUS_HEADERS:
         if c not in df.columns:
             df[c] = ""
@@ -2146,8 +2186,43 @@ def load_current_status_df_cached():
     return df
 
 
+def load_current_status_df_cached():
+    """Everyone's latest status, from memory - never a network wait.
+
+    The sheet copy is refreshed in the background; on top of it go this app's
+    own writes the sheet may not show yet (see livecache.recent_put), so a
+    sign-in or sign-out is on every screen the instant it happens."""
+    df = _current_status_raw()
+    entries = livecache.recent_entries()
+    if not entries:
+        return df
+    cols = list(df.columns) if len(df.columns) else list(CURRENT_STATUS_HEADERS)
+    pos = {}
+    for i, nm in enumerate(df["name"].astype(str).str.strip()):
+        pos[nm] = i
+    fresh = []
+    for e in entries:
+        vals = {c: e.get(c, "") for c in cols}
+        vals["name"] = e["name"]
+        vals["status"] = str(e.get("status", "")).strip().upper()
+        i = pos.get(e["name"])
+        if i is not None:
+            for c in cols:
+                df.iat[i, df.columns.get_loc(c)] = vals[c]
+        else:
+            fresh.append(vals)
+    if fresh:
+        df = pd.concat([df, pd.DataFrame(fresh, columns=cols)], ignore_index=True)
+    return df
+
+
+load_current_status_df_cached.clear = lambda: _current_status_raw.clear()
+
+
 def clear_current_status_cache():
-    load_current_status_df_cached.clear()
+    """Mark the sheet copy stale so the next background pass re-reads it.
+    Never blocks; this app's own pending writes stay layered on top."""
+    _current_status_raw.store.invalidate(kick=False)
 
 
 def rebuild_current_status_from_logs(sheet=None):
@@ -2159,6 +2234,7 @@ def rebuild_current_status_from_logs(sheet=None):
     Also doubles as the one-time backfill when the tab is first created.
     """
     sheet = sheet or get_current_status_sheet()
+    livecache.drain(8)  # let queued sign-in/outs reach logs before reading it
     status_map = get_latest_status_map(load_logs_df_cached())
     rows = [CURRENT_STATUS_HEADERS]
     for name, info in status_map.items():
@@ -2175,94 +2251,57 @@ def rebuild_current_status_from_logs(sheet=None):
         ])
     sheet.clear()
     sheet.update("A1", rows)
-    clear_current_status_cache()
+    livecache.drop_confirmed_overlays()
+    _current_status_raw.store.refresh_now()
 
 
 def upsert_current_status_rows(rows: list) -> bool:
     """Write each row's person into current_status in place: update their one
     row if they already have one, append a new row if they don't.
 
-    Reads the whole current_status tab first, but that tab only ever has one
-    row per staff member (tens of rows), not the full append-only history
-    (which only grows), so this stays cheap all season regardless of how much
-    history has piled up in logs. Batches all updates into one API call and
-    all new rows into one more, so a full van (many people at once) still
-    costs at most two calls here, not one per person.
-
-    Never raises: current_status is a cache, so a failure here must not break
-    the actual sign-in/out, which already succeeded by the time this runs.
+    Runs ONLY on the background write queue (see _queue_log_rows), never on a
+    click, so it is free to do a fresh read of the small current_status tab to
+    find row numbers. Batches all updates into one API call and all new rows
+    into one more, so a full van still costs at most two calls. Raises on
+    failure so the queue retries it.
     """
     if not rows:
         return True
-    try:
-        sheet = get_current_status_sheet()
-        # Reuse the cached read instead of a fresh get_all_values() call. The
-        # caller almost always just did a fresh status read (get_status_fresh /
-        # get_status_map_fresh) moments ago in this same click, so this is
-        # usually served from cache for free - cutting a full extra network
-        # round trip off of every single sign-in/out. read_sheet_df never
-        # reorders rows, so the DataFrame's row i is always sheet row i+2.
-        df = load_current_status_df_cached()
-        header = df.columns.tolist() if not df.empty else list(CURRENT_STATUS_HEADERS)
-        name_i = header.index("name") if "name" in header else 0
+    sheet = _ws(SHEET_CURRENT_STATUS)
+    df = read_sheet_df(sheet)
+    header = df.columns.tolist() if not df.empty else list(CURRENT_STATUS_HEADERS)
+    name_i = header.index("name") if "name" in header else 0
 
-        row_num_by_name = {}
-        if not df.empty:
-            for i, nm in enumerate(df[header[name_i]].astype(str).str.strip()):
-                if nm:
-                    row_num_by_name[nm] = i + 2  # 1 header + 1-index
+    row_num_by_name = {}
+    if not df.empty:
+        for i, nm in enumerate(df[header[name_i]].astype(str).str.strip()):
+            if nm:
+                row_num_by_name[nm] = i + 2  # 1 header + 1-index
 
-        updates = []
-        appends = []
-        append_index_by_name = {}
-        last_col = chr(ord("A") + len(header) - 1)
-        for rd in rows:
-            name = str(rd.get("name", "")).strip()
-            if not name:
-                continue
-            values = [rd.get(h, "") for h in header]
-            rn = row_num_by_name.get(name)
-            if rn:
-                updates.append({"range": f"A{rn}:{last_col}{rn}", "values": [values]})
-            elif name in append_index_by_name:
-                # A second occurrence of this name earlier queued a brand-new
-                # row rather than an update (they have no existing row yet).
-                # Overwrite that queued row in place so the batch still ends
-                # with exactly one row per name instead of appending a
-                # duplicate that then desyncs current_status from logs.
-                appends[append_index_by_name[name]] = values
-            else:
-                appends.append(values)
-                append_index_by_name[name] = len(appends) - 1
+    updates = []
+    appends = []
+    append_index_by_name = {}
+    last_col = chr(ord("A") + len(header) - 1)
+    for rd in rows:
+        name = str(rd.get("name", "")).strip()
+        if not name:
+            continue
+        values = [rd.get(h, "") for h in header]
+        rn = row_num_by_name.get(name)
+        if rn:
+            updates.append({"range": f"A{rn}:{last_col}{rn}", "values": [values]})
+        elif name in append_index_by_name:
+            # Same person twice in one batch: keep one row per name.
+            appends[append_index_by_name[name]] = values
+        else:
+            appends.append(values)
+            append_index_by_name[name] = len(appends) - 1
 
-        # The row math above is cheap and local; the actual network calls are
-        # the only slow part, and this is where every sign-in/out, van action,
-        # and group action was spending a full extra network round trip on
-        # top of the fresh read and the logs write it already needed. Firing
-        # them on a background thread (same pattern as notify_phone) takes
-        # that round trip off the critical path the user waits on.
-        # current_status is explicitly a cache that can be fully rebuilt from
-        # logs, and remember_status() already recorded this exact write into
-        # this session's local overlay (merge_recent_writes) before this
-        # function was even called - so every read this session makes already
-        # sees the correct status immediately, regardless of when this
-        # background write actually lands on Google's side. That's the same
-        # "Google lags a write" tolerance this cache already had to build in
-        # for network lag; this just uses it on purpose instead of around it.
-        def _write():
-            try:
-                if updates:
-                    sheet.batch_update(updates)
-                if appends:
-                    sheet.append_rows(appends)
-            except Exception:
-                pass
-
-        threading.Thread(target=_write, daemon=True).start()
-        clear_current_status_cache()
-        return True
-    except Exception:
-        return False
+    if updates:
+        sheet.batch_update(updates)
+    if appends:
+        sheet.append_rows(appends)
+    return True
 
 
 # =================================================
@@ -2274,72 +2313,30 @@ def upsert_current_status_rows(rows: list) -> bool:
 # that, every write this session makes is remembered locally for a short time
 # and merged into every status read. The app always trusts what it just did,
 # even if Google has not caught up yet.
-RECENT_WRITE_TTL_SECONDS = 45
-
-
-def remember_status(name: str, status: str, reason: str = "", other_reason: str = ""):
+def remember_status(name: str, status: str, reason: str = "", other_reason: str = "",
+                    timestamp: str = "", due_back: str = "", row_id: str = ""):
+    """Record what this app just did to a person, process-wide, the moment it
+    happens. load_current_status_df_cached layers these over the sheet copy
+    until the sheet has caught up, so every screen and the sign-in toggle see
+    the new status instantly."""
     name = str(name or "").strip()
     if not name:
         return
-    d = st.session_state.get("recent_status", {})
-    d[name] = {
+    livecache.recent_put(name, {
         "status": str(status or "").strip().upper(),
         "reason": reason or "",
         "other_reason": other_reason or "",
-        "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
-        "at": datetime.now(TZ),
-    }
-    st.session_state["recent_status"] = d
+        "timestamp": timestamp or datetime.now(TZ).isoformat(timespec="seconds"),
+        "due_back": due_back or "",
+        "id": row_id or "",
+    })
 
 
 def merge_recent_writes(df: pd.DataFrame) -> pd.DataFrame:
-    """Add this session's recent writes on top of the sheet data.
-
-    Recent local rows carry a current timestamp and are appended last, so the
-    robust recency sort ranks them newest and they win, exactly when Google has
-    not yet surfaced them. Expired entries are pruned. If Google has already
-    caught up, the duplicate says the same thing, so the result is unchanged.
-    """
-    d = st.session_state.get("recent_status", {})
-    if not d:
-        return df
-    now = datetime.now(TZ)
-    rows = []
-    keep = {}
-    for name, w in d.items():
-        try:
-            age = (now - w["at"]).total_seconds()
-        except Exception:
-            age = 1e9
-        if age <= RECENT_WRITE_TTL_SECONDS:
-            keep[name] = w
-            rows.append({
-                "id": "local",
-                "timestamp": w["timestamp"],
-                "name": name,
-                "reason": w["reason"],
-                "other_reason": w["other_reason"],
-                "action": w["status"],
-                "status": w["status"],
-                "due_back": "",
-                "late": "",
-            })
-    st.session_state["recent_status"] = keep
-    if not rows:
-        return df
-    add = pd.DataFrame(rows)
-    if df is None or df.empty:
-        return add
-    # Work on copies. df here is the process-wide cached logs frame, so adding
-    # columns to it in place would poison the cache for every other reader.
-    base = df.copy()
-    for c in base.columns:
-        if c not in add.columns:
-            add[c] = ""
-    for c in add.columns:
-        if c not in base.columns:
-            base[c] = ""
-    return pd.concat([base, add[base.columns]], ignore_index=True)
+    """Kept for its callers. The overlay of this app's own recent writes is
+    now applied inside load_current_status_df_cached itself, so every reader
+    gets it, not only the ones that remembered to call this."""
+    return df
 
 
 def get_latest_status_map(df: pd.DataFrame) -> dict:
@@ -2366,67 +2363,76 @@ def get_latest_status_map(df: pd.DataFrame) -> dict:
 
 
 def get_status_fresh(name: str):
-    """Read this person's TRUE current status straight from the sheet.
+    """This person's current status, from memory - no network wait.
 
-    The sign in/out box is a TOGGLE, so a stale read does not just show old
-    data, it picks the WRONG DIRECTION: it can sign someone OUT a second time
-    when they meant to sign IN, leaving them stuck on the Who's Out board.
-
-    Reads current_status (a handful of rows) instead of the full logs history,
-    so this stays fast no matter how big the season's history has grown. Drops
-    the cache first since Google Sheets itself can lag a moment behind a
-    write. Returns a dict with status/reason/other_reason, or None if the
-    person has no row yet.
+    The sign in/out box is a TOGGLE, so the direction has to be right: the
+    sheet copy is at most a few seconds old (refreshed in the background), and
+    anything this app wrote itself - the only way status changes at the
+    kiosk - is layered on top the instant it is written. Returns a dict with
+    status/reason/other_reason/..., or None if the person has no row yet.
     """
-    try:
-        clear_current_status_cache()
-    except Exception:
-        pass
-    df = merge_recent_writes(load_current_status_df_cached())
+    df = load_current_status_df_cached()
     return get_latest_status_map(df).get((name or "").strip())
 
 
 def get_status_map_fresh() -> dict:
-    """Everyone's true current status, straight from the sheet.
+    """Everyone's current status, from memory (same guarantees as above). The
+    mass actions (van checkout, field trip) decide who to sign out from this."""
+    return get_latest_status_map(load_current_status_df_cached())
 
-    The mass actions (van checkout, field trip) decide who to sign out based on
-    who is currently IN. Deciding that from a cache up to 10 seconds old can
-    sign out someone who ALREADY signed themselves out seconds earlier, giving
-    them two OUT rows and stranding them on the board. Same failure mode that
-    hit the toggle. So these reads are always fresh, and read current_status
-    instead of the full logs history for the same speed reason as above.
-    """
+
+def _logs_have_ids(sheet, headers, ids) -> bool:
+    """True if every id is already in the logs tab. Used only on a RETRY, so a
+    write that actually landed before the connection dropped isn't repeated."""
     try:
-        clear_current_status_cache()
+        id_col = (headers.index("id") + 1) if "id" in headers else 1
+        have = set(sheet.col_values(id_col))
+        return all(i in have for i in ids)
     except Exception:
-        pass
-    return get_latest_status_map(merge_recent_writes(load_current_status_df_cached()))
+        return False
+
+
+def _queue_log_rows(rows: list):
+    """The fast path for every sign-in/out. Record the rows in memory first -
+    every screen reflects them immediately - then let the write queue put them
+    in Google Sheets right behind the click: one append to logs (the permanent
+    record), then the current_status update. The queue keeps retrying until
+    both land, in the order they were made."""
+    for rd in rows:
+        remember_status(
+            rd.get("name", ""), rd.get("status", ""), rd.get("reason", ""),
+            rd.get("other_reason", ""), timestamp=rd.get("timestamp", ""),
+            due_back=rd.get("due_back", ""), row_id=rd.get("id", ""),
+        )
+    ids = [rd.get("id", "") for rd in rows]
+    state = {"logged": False}
+
+    def job(attempt):
+        if not state["logged"]:
+            sheet = _ws(SHEET_LOGS)
+            headers = get_log_headers()
+            if not (attempt > 0 and _logs_have_ids(sheet, headers, ids)):
+                sheet.append_rows([[rd.get(h, "") for h in headers] for rd in rows])
+            state["logged"] = True
+            try:
+                load_logs_df_cached.clear()
+            except Exception:
+                pass
+        upsert_current_status_rows(rows)
+        for rd in rows:
+            livecache.recent_confirm(str(rd.get("name", "")).strip(), rd.get("id", ""))
+        _current_status_raw.store.invalidate(kick=True)
+
+    livecache.submit(job, tag=ids[0] if len(ids) == 1 else None)
 
 
 def append_log_rows_batch(rows: list) -> bool:
-    """Write several log rows in ONE API call.
-
-    One call instead of one per person avoids tripping Google's per-minute
-    write limit on a full van. Never halts the app: returns True on success,
-    False on failure, so the caller stays in control.
-    """
+    """Record several log rows (a full van, a field-trip group) at once. Always
+    succeeds from the caller's point of view: the write is queued and retried."""
     if not rows:
         return True
-    try:
-        sheet = get_worksheet(SHEET_LOGS)
-        headers = get_log_headers()
-        matrix = [[rd.get(h, "") for h in headers] for rd in rows]
-        sheet.append_rows(matrix)
-        clear_logs_cache()
-        for rd in rows:
-            remember_status(rd.get("name", ""), rd.get("status", ""), rd.get("reason", ""), rd.get("other_reason", ""))
-        try:
-            upsert_current_status_rows(rows)
-        except Exception:
-            pass
-        return True
-    except Exception:
-        return False
+    _queue_log_rows(rows)
+    return True
 
 
 def auto_signout_for_van(party: list, van_name: str):
@@ -2607,13 +2613,16 @@ ADMIN_SIGNIN_TAG = "ADMIN_SIGNIN"
 # =================================================
 # DAYS OFF (DISPLAY ONLY)
 # =================================================
-@st.cache_data(ttl=15)
+@livecache.cached(
+    "days_off", ttl=60, max_stale=1800,
+    default=lambda: pd.DataFrame(columns=["name", "weekday", "active"]),
+)
 def load_days_off_df_cached():
-    """Reads days_off sheet if present. If missing, returns empty DF (feature disabled)."""
+    """Reads days_off sheet if present. If the tab does not exist the feature
+    is simply off (empty frame, and that is a valid answer, not a failure)."""
     try:
-        sheet = get_worksheet(SHEET_DAYS_OFF)
-        df = read_sheet_df(sheet)
-    except Exception:
+        df = read_sheet_df(_ws(SHEET_DAYS_OFF))
+    except WorksheetNotFound:
         return pd.DataFrame(columns=["name", "weekday", "active"])
 
     for c in ["name", "weekday", "active"]:
@@ -2699,29 +2708,61 @@ def ensure_vans_header(sheet):
         pass
 
 
-@st.cache_data(ttl=10)
+@livecache.cached("vans", ttl=12, max_stale=60, default=pd.DataFrame)
+def _vans_raw():
+    return read_sheet_df(_ws(SHEET_VANS))
+
+
 def load_vans_df_cached():
-    # Same reasoning as load_staff_df_cached: an uncaught Sheets error here
-    # would take down the whole kiosk via main()'s catch-all instead of just
-    # leaving the Vans board empty. Every caller already treats an empty
-    # frame as "no van data yet", so this is a safe, silent fallback.
-    try:
-        sheet = get_vans_sheet()
-        return read_sheet_df(sheet)
-    except Exception:
-        return pd.DataFrame()
+    """The vans log, from memory - never a network wait. The sheet copy is
+    refreshed in the background; van rows this app wrote that the sheet may
+    not show yet are layered on top, so a van taken out is OUT on every screen
+    (and the double-booking check sees it) the instant it happens."""
+    df = _vans_raw()
+    pending = livecache.vans_entries()
+    if not pending:
+        return df
+    have = set(df["id"].astype(str)) if (not df.empty and "id" in df.columns) else set()
+    rows = [
+        {k: v for k, v in e.items() if k not in ("at", "confirmed_at")}
+        for e in pending
+        if str(e.get("id", "")) not in have
+    ]
+    if not rows:
+        return df
+    add = pd.DataFrame(rows)
+    if df.empty:
+        return add
+    for c in df.columns:
+        if c not in add.columns:
+            add[c] = ""
+    return pd.concat([df, add[list(df.columns) + [c for c in add.columns if c not in df.columns]]], ignore_index=True)
+
+
+load_vans_df_cached.clear = lambda: _vans_raw.clear()
 
 
 def clear_vans_cache():
-    load_vans_df_cached.clear()
+    """Mark the sheet copy stale so the background refresh re-reads it. Never
+    blocks; this app's own pending van rows stay layered on top."""
+    _vans_raw.store.invalidate(kick=True)
 
 
 def append_vans_row(row_dict: dict):
-    sheet = get_vans_sheet()
-    headers = get_van_headers()
-    row = [row_dict.get(h, "") for h in headers]
-    sheet.append_row(row)
-    clear_vans_cache()
+    """Record a van checkout/checkin. Instant: it is in memory (and so on every
+    screen) right away, and the write to the vans tab is queued and retried."""
+    row_id = str(row_dict.get("id", ""))
+    livecache.vans_put(row_dict)
+
+    def job(attempt):
+        sheet = _ws(SHEET_VANS)
+        headers = get_van_headers()
+        if not (attempt > 0 and _logs_have_ids(sheet, headers, [row_id])):
+            sheet.append_row([row_dict.get(h, "") for h in headers])
+        livecache.vans_confirm(row_id)
+        _vans_raw.store.invalidate(kick=True)
+
+    livecache.submit(job, tag=f"van:{row_id}")
 
 
 def compute_van_status(vans_df: pd.DataFrame) -> dict:
@@ -2935,7 +2976,14 @@ def render_stale_fork(reason: str, other_reason: str):
                 status="IN",
                 late=late_note,
             )
-            set_pending_undo(new_id, f"{name}'s sign-in")
+            set_pending_undo(
+                new_id, f"{name}'s sign-in", name=name,
+                prev={
+                    "status": "OUT", "reason": fork.get("reason", ""),
+                    "other_reason": fork.get("other_reason", ""),
+                    "timestamp": fork.get("timestamp", ""),
+                },
+            )
             st.session_state.pop("pending_fork", None)
             st.session_state["log_flash_kind"] = "in"
             st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED IN"
@@ -2961,7 +3009,7 @@ def render_stale_fork(reason: str, other_reason: str):
             )
             due = compute_due_back(reason, datetime.now(TZ))
             new_id = append_log_row(name, reason, other_reason, action="OUT", status="OUT", due_back=due)
-            set_pending_undo(new_id, f"{name}'s sign-out")
+            set_pending_undo(new_id, f"{name}'s sign-out", name=name)
             st.session_state.pop("pending_fork", None)
             st.session_state["log_flash_kind"] = "out"
             st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED OUT"
@@ -2971,9 +3019,10 @@ def render_stale_fork(reason: str, other_reason: str):
             st.rerun()
 
     with c3:
-        if st.button("Cancel", key="fork_cancel", use_container_width=True):
-            st.session_state.pop("pending_fork", None)
-            st.rerun()
+        st.button(
+            "Cancel", key="fork_cancel", use_container_width=True,
+            on_click=lambda: st.session_state.pop("pending_fork", None),
+        )
 
     ferr = st.session_state.pop("fork_error", "")
     if ferr:
@@ -3029,6 +3078,102 @@ def whos_out_strip():
         )
 
 
+def _flash(msg: str, kind: str, word: str):
+    """Queue the big confirmation banner for the next render."""
+    st.session_state.pop("log_flash_at", None)  # fresh message, fresh clock
+    st.session_state["log_flash"] = msg
+    st.session_state["log_flash_kind"] = kind
+    st.session_state["log_flash_word"] = word
+
+
+def _undo_submit(undo):
+    """Undo button handler. Runs before the page re-renders (see _signio_submit)."""
+    if delete_log_row_by_id(undo["id"], name=undo.get("name", ""), prev=undo.get("prev")):
+        notify_phone(f"{CAMP_NOTIFY_PREFIX}: UNDO", f"Undo: {undo['desc']}")
+        _flash(f"Undone: {undo['desc']}", "out", "UNDONE")
+    else:
+        _flash("Nothing to undo. That record is already gone.", "in", "")
+    st.session_state.pop("undo_action", None)
+    st.session_state["signio_nonce"] += 1
+
+
+def _signio_submit(staff_pins: dict, n: int):
+    """The Enter button: one code toggles a person in or out.
+
+    Runs as an on_click callback, so everything below happens before Streamlit
+    re-runs the page - the result is drawn in a single pass. Nothing here
+    waits on Google: status comes from memory (with this app's own writes
+    already layered in) and the sheet writes are queued behind the click.
+    Anything to show the user goes through session_state, since a callback
+    cannot draw.
+    """
+    code = st.session_state.get(f"signio_code_{n}", "")
+    reason = st.session_state.get("signout_reason", REASONS[0])
+    other_reason = st.session_state.get(f"signout_other_reason_{n}", "")
+
+    name, err = resolve_code(code, build_pin_lookup(staff_pins))
+    if err:
+        st.session_state["signio_error"] = err
+        return
+
+    info = get_status_fresh(name)
+    is_out = bool(info and info["status"] == "OUT")
+
+    if is_out:
+        due = effective_due_back(info.get("reason", ""), info.get("timestamp", ""))
+        mins = minutes_late(due)
+
+        # THE FORK. If signing them in would be surprising (stale sign-out,
+        # likely a forgotten sign-in), do not guess. Stop and ask whether they
+        # are coming in or leaving again now. Everyone whose state is fresh
+        # skips this entirely.
+        if is_surprising_signin(info):
+            st.session_state["pending_fork"] = {
+                "name": name,
+                "reason": info.get("reason", ""),
+                "other_reason": info.get("other_reason", ""),
+                "timestamp": info.get("timestamp", ""),
+                "mins": mins,
+            }
+            st.session_state["signio_nonce"] += 1
+            return
+
+        # Normal, recent sign-in: carry their reason, note lateness.
+        late_note = f"LATE {mins} min" if mins > 0 else ""
+        new_id = append_log_row(
+            name,
+            info.get("reason", ""),
+            info.get("other_reason", ""),
+            action="IN",
+            status="IN",
+            late=late_note,
+        )
+        set_pending_undo(new_id, f"{name}'s sign-in", name=name, prev=info)
+        if mins > 0:
+            notify_phone(
+                f"{CAMP_NOTIFY_PREFIX}: Signed IN (LATE)",
+                f"{name} signed in {mins} min late ({info.get('reason','')})",
+            )
+            msg = f"Welcome back. You were {mins} min late."
+        else:
+            msg = "Welcome back to camp."
+        _flash(msg, "in", f"{name.upper()} IS SIGNED IN")
+        st.session_state["signio_nonce"] += 1
+    elif reason == "Other (type reason)" and not other_reason.strip():
+        st.session_state["signio_error"] = "Please type a reason for 'Other'."
+    else:
+        due = compute_due_back(reason, datetime.now(TZ))
+        new_id = append_log_row(name, reason, other_reason, action="OUT", status="OUT", due_back=due)
+        set_pending_undo(new_id, f"{name}'s sign-out", name=name, prev=info)
+        shown = reason if reason != "Other (type reason)" else other_reason
+        _flash(
+            f"Reason: {shown}. Sign back in when you return.",
+            "out",
+            f"{name.upper()} IS SIGNED OUT",
+        )
+        st.session_state["signio_nonce"] += 1
+
+
 def page_sign_in_out(staff_pins: dict, staff_names: list):
     page_title(f"{CAMP_NAME} Staff", "Sign In / Out")
 
@@ -3047,7 +3192,10 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     if st.session_state.get("log_flash") and "log_flash_at" not in st.session_state:
         st.session_state["log_flash_at"] = datetime.now(TZ)
 
-    @st.fragment(run_every=1)
+    # The 1-second tick only exists while a banner is on screen. It used to
+    # run forever - a full fragment pass on the server every second of every
+    # idle minute, competing with the real clicks for the same CPU.
+    @st.fragment(run_every=1 if st.session_state.get("log_flash") else None)
     def flash_ticker():
         msg = st.session_state.get("log_flash", "")
         if not msg:
@@ -3057,6 +3205,8 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
         if age >= FLASH_DISPLAY_SECONDS:
             for k in ("log_flash", "log_flash_kind", "log_flash_word", "log_flash_ask", "log_flash_at"):
                 st.session_state.pop(k, None)
+            # One full run re-declares this fragment without its timer.
+            st.rerun()
             return
         big_flash(
             msg,
@@ -3077,17 +3227,10 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
         # to tap it. Naming the person makes it obvious whose action it is.
         uc1, uc2 = st.columns([2, 3])
         with uc1:
-            if st.button(f"Undo {undo['desc']}", key="undo_btn", use_container_width=True):
-                if delete_log_row_by_id(undo["id"]):
-                    notify_phone(f"{CAMP_NOTIFY_PREFIX}: UNDO", f"Undo: {undo['desc']}")
-                    st.session_state["log_flash"] = f"Undone: {undo['desc']}"
-                    st.session_state["log_flash_kind"] = "out"
-                    st.session_state["log_flash_word"] = "UNDONE"
-                else:
-                    st.session_state["log_flash"] = "Nothing to undo. That record is already gone."
-                st.session_state.pop("undo_action", None)
-                st.session_state["signio_nonce"] += 1
-                st.rerun()
+            st.button(
+                f"Undo {undo['desc']}", key="undo_btn", use_container_width=True,
+                on_click=_undo_submit, args=(undo,),
+            )
         with uc2:
             st.caption(f"Only if that was a mistake. {max(left, 0)}s left.")
 
@@ -3150,78 +3293,21 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
         with st.form("signio_form", clear_on_submit=False):
             code_col, btn_col = st.columns([2, 1])
             with code_col:
-                code = st.text_input("Your code", type="password", max_chars=4, key=f"signio_code_{n}")
+                st.text_input("Your code", type="password", max_chars=4, key=f"signio_code_{n}")
             with btn_col:
                 st.markdown("<div style='height:1.6rem'></div>", unsafe_allow_html=True)
-                submitted = st.form_submit_button("Enter", use_container_width=True)
+                # The sign-in/out itself runs as the button's on_click, BEFORE
+                # the page re-runs, so the result renders in ONE pass. Doing it
+                # inline and then calling st.rerun() ran the whole page twice
+                # for every click.
+                st.form_submit_button(
+                    "Enter", use_container_width=True,
+                    on_click=_signio_submit, args=(staff_pins, n),
+                )
 
-    if submitted:
-        name, err = resolve_code(code, pin_lookup)
-        if err:
-            st.error(err)
-        else:
-            # A network round trip to Sheets sits behind this click, and a
-            # kiosk with no other feedback just looks frozen for that moment.
-            with st.spinner("One moment..."):
-                # Decide direction from a FRESH read, never the cache. This is
-                # a toggle, so a stale read would not just show old data, it
-                # would flip the wrong way and sign someone OUT twice.
-                info = get_status_fresh(name)
-                is_out = bool(info and info["status"] == "OUT")
-
-                if is_out:
-                    due = effective_due_back(info.get("reason", ""), info.get("timestamp", ""))
-                    mins = minutes_late(due)
-
-                    # THE FORK. If signing them in would be surprising (stale
-                    # sign-out, likely a forgotten sign-in), do not guess. Stop
-                    # and ask whether they are coming in or leaving again now.
-                    # Everyone whose state is fresh skips this entirely.
-                    if is_surprising_signin(info):
-                        st.session_state["pending_fork"] = {
-                            "name": name,
-                            "reason": info.get("reason", ""),
-                            "other_reason": info.get("other_reason", ""),
-                            "timestamp": info.get("timestamp", ""),
-                            "mins": mins,
-                        }
-                        st.session_state["signio_nonce"] += 1
-                        st.rerun()
-
-                    # Normal, recent sign-in: carry their reason, note lateness.
-                    late_note = f"LATE {mins} min" if mins > 0 else ""
-                    new_id = append_log_row(
-                        name,
-                        info.get("reason", ""),
-                        info.get("other_reason", ""),
-                        action="IN",
-                        status="IN",
-                        late=late_note,
-                    )
-                    set_pending_undo(new_id, f"{name}'s sign-in")
-                    st.session_state["log_flash_kind"] = "in"
-                    st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED IN"
-                    if mins > 0:
-                        notify_phone(
-                            f"{CAMP_NOTIFY_PREFIX}: Signed IN (LATE)",
-                            f"{name} signed in {mins} min late ({info.get('reason','')})",
-                        )
-                        st.session_state["log_flash"] = f"Welcome back. You were {mins} min late."
-                    else:
-                        st.session_state["log_flash"] = "Welcome back to camp."
-                    st.session_state["signio_nonce"] += 1
-                    st.rerun()
-                elif reason == "Other (type reason)" and not other_reason.strip():
-                    st.error("Please type a reason for 'Other'.")
-                else:
-                    due = compute_due_back(reason, datetime.now(TZ))
-                    new_id = append_log_row(name, reason, other_reason, action="OUT", status="OUT", due_back=due)
-                    set_pending_undo(new_id, f"{name}'s sign-out")
-                    st.session_state["log_flash_kind"] = "out"
-                    st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED OUT"
-                    st.session_state["log_flash"] = f"Reason: {reason if reason != 'Other (type reason)' else other_reason}. Sign back in when you return."
-                    st.session_state["signio_nonce"] += 1
-                    st.rerun()
+    signio_err = st.session_state.pop("signio_error", "")
+    if signio_err:
+        st.error(signio_err)
 
     render_stale_fork(reason, other_reason)
 
@@ -3366,6 +3452,17 @@ def render_van_tiles(status_map: dict, selected: str = ""):
     st.markdown(f"<div class='sg-fleet'>{''.join(tiles)}</div>", unsafe_allow_html=True)
 
 
+def _pick_van(v: str):
+    """Tile button handler: runs before the page re-renders, so tapping a van
+    draws its form in one pass instead of two."""
+    st.session_state["van_selected"] = v
+    st.session_state["van_selected_at"] = datetime.now(TZ)
+
+
+def _clear_van_pick():
+    st.session_state["van_selected"] = ""
+
+
 def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
     page_title("Camp Vehicles", "Vans")
 
@@ -3416,10 +3513,10 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
     for i, v in enumerate(VANS):
         with cols[i]:
             verb = "Bring back" if status_now.get(v, {}).get("status") == "OUT" else "Take out"
-            if st.button(f"{verb} {van_label(v).split(' (')[0]}", key=f"vanpick_{v}", use_container_width=True):
-                st.session_state["van_selected"] = v
-                st.session_state["van_selected_at"] = datetime.now(TZ)
-                st.rerun()
+            st.button(
+                f"{verb} {van_label(v).split(' (')[0]}", key=f"vanpick_{v}",
+                use_container_width=True, on_click=_pick_van, args=(v,),
+            )
 
     if not selected:
         empty_note("Pick a van above to take one out or bring one back.")
@@ -3447,9 +3544,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
             gas_left = st.selectbox("Gas left", ["Full", "3/4", "Half", "1/4", "Low / Empty"])
             back_go = st.form_submit_button(f"Bring {van_label(selected)} Back", use_container_width=True)
 
-        if st.button("Pick a different van", key="van_cancel_in"):
-            st.session_state["van_selected"] = ""
-            st.rerun()
+        st.button("Pick a different van", key="van_cancel_in", on_click=_clear_van_pick)
 
         if back_go:
             def do_bring_back():
@@ -3460,11 +3555,11 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                     st.error(err)
                     return
 
-                # Drop the cache first: load_vans_df_cached is kept for up to
-                # ttl=10s, and this is a toggle-shaped decision, not just a
-                # display. Checking a stale copy here could write a second
-                # CHECKIN row on a van someone else just brought back.
-                clear_vans_cache()
+                # A toggle-shaped decision, not just a display: checking a stale
+                # copy could write a second CHECKIN on a van someone else just
+                # brought back. load_vans_df_cached already includes every van
+                # row this app has written, the instant it was written, so
+                # this is correct without waiting on Google.
                 fresh_df = load_vans_df_cached()
                 if compute_van_status(fresh_df).get(selected, {}).get("status") != "OUT":
                     st.error(f"{van_label(selected)} is already signed in.")
@@ -3539,9 +3634,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
 
         if not driver_names:
             st.warning("No eligible drivers found. Set drivers.passed_test=TRUE for cleared drivers.")
-            if st.button("Pick a different van", key="van_cancel_nodrv"):
-                st.session_state["van_selected"] = ""
-                st.rerun()
+            st.button("Pick a different van", key="van_cancel_nodrv", on_click=_clear_van_pick)
             crest_footer()
             return
 
@@ -3555,9 +3648,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 other_purpose = st.text_input("Other purpose (required)")
             take_go = st.form_submit_button(f"Take {van_label(selected)} Out", use_container_width=True)
 
-        if st.button("Pick a different van", key="van_cancel_out"):
-            st.session_state["van_selected"] = ""
-            st.rerun()
+        st.button("Pick a different van", key="van_cancel_out", on_click=_clear_van_pick)
 
         if take_go:
             def do_take_out():
@@ -3570,12 +3661,10 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                     st.error("This code is not cleared to drive a van.")
                     return
 
-                # Guard against two people grabbing the same van at once. This
-                # only works against a FRESH read: load_vans_df_cached is kept
-                # for up to ttl=10s, and two counselors tapping "Take Out"
-                # inside that window would both have read the van as IN and
-                # both would pass a cached check, double-booking the van.
-                clear_vans_cache()
+                # Guard against two people grabbing the same van at once. The
+                # first checkout is recorded in memory the instant it happens
+                # (see append_vans_row), so the second one sees the van as OUT
+                # immediately - no wait on Google needed.
                 if compute_van_status(load_vans_df_cached()).get(selected, {}).get("status") == "OUT":
                     st.error(f"{van_label(selected)} was taken a moment ago. Pick another van.")
                     return
@@ -3666,9 +3755,10 @@ def page_group_signout(staff_pins: dict, staff_names: list):
         crest_footer()
         return
 
-    if st.button("Not you? Start over", key="group_cancel"):
-        st.session_state.pop("group_leader", None)
-        st.rerun()
+    st.button(
+        "Not you? Start over", key="group_cancel",
+        on_click=lambda: st.session_state.pop("group_leader", None),
+    )
 
     info = get_status_fresh(leader)
     is_leading_trip = bool(
@@ -4456,11 +4546,10 @@ def ensure_headers_once():
     cannot freeze the kiosk on a blank screen; if it does not finish, the app
     still loads and the write paths ensure headers anyway.
     """
-    if st.session_state.get("_headers_ensured"):
+    # Once per server process, not once per browser session: a kiosk reload
+    # (or a second screen) should never repeat this seven-call startup step.
+    if not livecache.once("headers_ensured"):
         return
-    # Mark done FIRST. If a call below is slow and the user reloads, we do not
-    # want to re-run this heavy startup step every time.
-    st.session_state["_headers_ensured"] = True
     try:
         ensure_logs_header(get_worksheet(SHEET_LOGS))
         ensure_vans_header(get_vans_sheet())
@@ -4481,6 +4570,7 @@ def _main_body():
     inject_css()
     kiosk_clock()
     ensure_headers_once()
+    livecache.prewarm()  # first load of every sheet at once, not one by one
 
     logo_path = Path(CAMP_LOGO_PATH)
     if logo_path.exists():
@@ -4569,6 +4659,17 @@ def _main_body():
                 pass
 
         heartbeat()
+
+    # Streamlit runs a full garbage collection after EVERY script run, and it
+    # scans every object the process owns - streamlit, pandas, gspread and the
+    # rest add up to hundreds of thousands. Everything allocated by this point
+    # lives for the life of the server, so move it out of the collector's
+    # sight: each run's collection then only looks at what that run created.
+    if livecache.once("gc_freeze"):
+        import gc
+
+        gc.collect()
+        gc.freeze()
 
 
 def main():
