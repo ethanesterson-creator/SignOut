@@ -1,0 +1,81 @@
+# SignOut: new camp intake.
+# Copy this file to  provision/intake_<camp>.toml , fill it in, then run:
+#     .venv/Scripts/python.exe provision/new_camp.py provision/intake_<camp>.toml
+# Anything you leave out falls back to a sensible default. Lines starting with
+# a # are notes and can stay.
+
+# ---- Who -------------------------------------------------------------------
+camp_name = "Camp Example"
+tagline = "Lakeville, NY &middot; Est. 1985"      # shown in the page footer
+director_name = "Pat Example"                      # who we email
+director_email = "director@campexample.org"
+timezone = "US/Eastern"                            # e.g. US/Central, US/Mountain, US/Pacific
+
+# ---- How it looks ----------------------------------------------------------
+logo_path = "logo-header-2.png"                    # a PNG for the sidebar (put the file in the repo root)
+board_label = "The Main Lodge board"               # small label above the Who's Out page title
+
+# ---- Filled in as the setup progresses -------------------------------------
+# After you create the camp's service account, paste the path to its JSON key:
+service_account_json = ""                          # e.g. "C:/keys/example-signout.json"
+# After the director shares their Google Sheet with the service account, paste its URL:
+spreadsheet_url = ""                               # https://docs.google.com/spreadsheets/d/<ID>/edit
+
+# ---- Staff -----------------------------------------------------------------
+# A CSV with a header row. Columns: name (required), admin (TRUE for office/admin
+# staff), driver (TRUE for anyone cleared to drive a van). Example:
+#   name,admin,driver
+#   Alex Rivera,TRUE,TRUE
+#   Sam Lee,,
+staff_csv = ""                                     # e.g. "C:/camps/example/staff.csv"
+
+# ---- Vans (leave out if the camp has none) ----------------------------------
+vans = ["Van 1", "Van 2"]
+[van_labels]
+"Van 1" = "Van 1 (Blue)"
+"Van 2" = "Van 2 (Green)"
+
+# ---- Daily schedule: [period name, start, end], 24-hour clock ----------------
+# Staff can edit the live schedule later in the camp's Google Sheet; this is the
+# starting point.
+[schedule]
+periods = [
+  ["Period 1", "09:00", "09:50"],
+  ["Period 2", "10:00", "10:50"],
+  ["Period 3", "11:00", "11:50"],
+  ["Rest Period", "13:00", "14:00"],
+  ["Period 4", "14:10", "15:00"],
+  ["Period 5", "15:10", "16:00"],
+]
+
+# ---- Reasons staff can pick when they sign out -------------------------------
+# rule = none        no deadline
+#        period_end  back `grace_min` minutes before the current period ends
+#        next_clock  back the next time the clock reads hour:minute
+#        day_after   a full day off: back hour:minute the morning after
+# Keep one "Other (type reason)" so staff can type a custom reason.
+[[reasons]]
+name = "Period Off"
+rule = "period_end"
+grace_min = 5
+
+[[reasons]]
+name = "Night Off"
+rule = "next_clock"
+hour = 0
+minute = 15
+
+[[reasons]]
+name = "Day Off"
+rule = "day_after"
+hour = 7
+minute = 45
+nextday_cutoff_hour = 12
+
+[[reasons]]
+name = "Other (type reason)"
+rule = "none"
+
+# ---- Alert thresholds (optional) -------------------------------------------
+# forgot_threshold_minutes = 180    # this overdue is treated as "forgot to sign in"
+# nightly_summary_hour = 0          # hour (0-23) for the "still out tonight" summary

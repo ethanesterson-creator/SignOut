@@ -26,8 +26,12 @@ Sheet, which the camp edits.
       label, thresholds, hours, spreadsheet id guard. Defaults = Bauercrest, proven
       identical to the old hardcoded rules by `tests/test_camp_config.py`.
 - [ ] Brand color per camp (theme.py is owned by the UI work; needs a coordinated change)
-- [ ] Sheet template + one-page intake form
-- [ ] Provisioning checklist, then script
+- [x] Intake form (`provision/intake_template.toml`) and onboarding generator
+      (`provision/new_camp.py`): validates the intake, writes a ready `secrets.toml`
+      (random admin password, PIN salt and notification topics), staff import with
+      unique codes, the director email and a per-camp checklist. Never talks to Google.
+      Tested; also checked by booting the app as a fake "Camp Example".
+- [ ] Hosting chosen + one-command deploy of a camp's instance
 - [ ] Health reporting + alerts (uptime, app heartbeat, daily digest) to Ethan's phone
 - [ ] Staged updates (Bauercrest first) + rollback
 - [ ] Nightly Sheet backups
@@ -86,3 +90,19 @@ nextday_cutoff_hour = 12 # signing out at/after noon means tomorrow is the day o
 [[reasons]]
 name = "Other (type reason)"   # shows a "type a reason" box
 ```
+
+
+## Onboarding a camp (today)
+
+1. Copy `provision/intake_template.toml` to `provision/intake_<camp>.toml`, fill it in.
+2. Create the camp's own Google service account; put its key path in the intake.
+3. `.venv/Scripts/python.exe provision/new_camp.py provision/intake_<camp>.toml`
+   -> `camps/<camp>/director_email.txt` and `CHECKLIST.md`. Send the email.
+4. When the director replies with the Sheet link, add it (and the staff CSV) to the intake,
+   run the command again -> `secrets.toml`, `staff_import.csv`, `credentials.txt`.
+5. Follow `CHECKLIST.md`. `camps/` is git-ignored: it holds secrets.
+
+Known limit: the Google Sheets API allows roughly 300 reads/minute per Google Cloud
+project across all its service accounts. With one shared project that caps the fleet at
+roughly 10-20 camps (each kiosk's background refresh uses part of it; not yet measured).
+Beyond that, give each camp its own Google Cloud project or request a quota increase.
