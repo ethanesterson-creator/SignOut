@@ -4588,7 +4588,10 @@ def _main_body():
     # falsely count as activity.
     st.session_state["kiosk_active_at"] = datetime.now(TZ)
 
-    render_emergency_banner()
+    # Who's Out draws its own copy inside its refreshing board, so drawing one here
+    # as well showed the emergency banner twice on that page.
+    if page != "Who's Out":
+        render_emergency_banner()
 
     if page == "Sign In / Out":
         page_sign_in_out(staff_pins, staff_names)
