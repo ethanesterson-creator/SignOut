@@ -109,6 +109,18 @@ def test_a_failing_sender_never_raises():
     assert w.emit("t", "m") is False
 
 
+def test_module_level_event_is_safe_without_a_watchdog_and_forwards_with_one():
+    ow.CURRENT = None
+    assert ow.event("k", "t", "d") is False            # nothing running: silently nothing
+    w, sent, clock = make()
+    ow.CURRENT = w
+    try:
+        assert ow.event("code_lock", "Repeated wrong codes", "x") is True
+        assert sent and sent[0][0] == "[Camp Example] Repeated wrong codes"
+    finally:
+        ow.CURRENT = None
+
+
 if __name__ == "__main__":
     for k, v in sorted(globals().items()):
         if k.startswith("test_"):

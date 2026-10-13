@@ -44,6 +44,21 @@ def ntfy_sender(topic: str, server: str = "https://ntfy.sh", timeout: int = 6):
     return send
 
 
+# The running watchdog for this process. It lives here, not in the app script, because
+# Streamlit re-runs the script on every click and would otherwise lose the reference.
+CURRENT = None
+
+
+def event(key, title, detail="", **kw):
+    """Report a one-off event through the running watchdog, if there is one. Never raises."""
+    try:
+        if CURRENT is not None:
+            return CURRENT.event(key, title, detail, **kw)
+    except Exception:
+        pass
+    return False
+
+
 class Watchdog:
     def __init__(self, camp, send, clock=time.time, min_fail=180, repeat=1800,
                  event_cooldown=600, daily_cap=40):

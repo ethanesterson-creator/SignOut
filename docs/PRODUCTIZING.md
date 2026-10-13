@@ -43,9 +43,11 @@ Sheet, which the camp edits.
 - [ ] Name, domain, price, LLC, Stripe
 
 ### Harder, in the order I'd do them
-1. **Code-guessing protection.** Today nothing limits wrong codes, and a camp's address is public.
-   A 4-digit code has only 10,000 possibilities. Add a process-wide limit (e.g. 10 wrong codes in 2
-   minutes pauses entry for a minute) plus an alert to you. Must not slow a counselor who mistypes once.
+1. ~~Code-guessing protection~~ **Built (branch `security/code-guess-limit`), tested live.** 10 wrong codes in 2
+   minutes, or 25 in an hour, pauses code entry for 60 seconds (longer on repeats, up to 15 min); the admin
+   password is stricter (5 in 5 min). You get a "Repeated wrong codes" alert. It slows and flags guessing;
+   it does not make a 4-digit code strong. A guesser still has a decent chance of hitting SOME staff code
+   over hours. Bigger fix if a camp needs it: 6-digit codes (a decision for later).
 2. **Camp look: colors + logo.** theme.py hardcodes Bauercrest navy in many places; make it driven
    by a few per-camp colors without changing Bauercrest's look.
 3. **A public demo camp** with fake staff, for the ACA contact and pilots to click through.
