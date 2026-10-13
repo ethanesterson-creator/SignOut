@@ -237,7 +237,10 @@ Director: {intake.get('director_name', '')} <{intake.get('director_email', '')}>
 
 ## Hand-off
 - [ ] Give the director: the app address, the admin password, `staff_import.csv`.
-- [ ] Add the camp to the alerts list (uptime check + daily digest).
+- [ ] Add an outside uptime check for `<the camp's address>/_stcore/health` (a free service such as
+      UptimeRobot or Better Stack), alerting you by email and push. It catches the one case the app
+      cannot report itself: the whole app being down.
+- [ ] Confirm you got the app's own "Started" alert on your ops channel (needs provision/ops.local.toml).
 - [ ] Put the season renewal date in your calendar.
 """
 
@@ -246,7 +249,17 @@ Director: {intake.get('director_name', '')} <{intake.get('director_email', '')}>
 # the run
 # ---------------------------------------------------------------------------
 
-def provision(intake_path: str, out_root: str = "camps", rng=None) -> dict:
+def load_ops(path=None) -> dict:
+    """The operator's private alert channel, shared by every camp you run. Lives in
+    provision/ops.local.toml (git-ignored); see ops.example.toml."""
+    p = Path(path) if path else ROOT / "provision" / "ops.local.toml"
+    if not p.exists():
+        return {}
+    with p.open("rb") as f:
+        return tomllib.load(f)
+
+
+def provision(intake_path: str, out_root: str = "camps", rng=None, ops_path=None) -> dict:
     """Do the whole job. Returns what was written, for the CLI and for tests."""
     try:
         with open(intake_path, "rb") as f:
@@ -324,6 +337,11 @@ def provision(intake_path: str, out_root: str = "camps", rng=None) -> dict:
             "ntfy_topic": existing.get("ntfy_topic") or f"signout-{slug}-{_secrets.token_hex(5)}",
             "ntfy_topic_vans": existing.get("ntfy_topic_vans") or f"signout-{slug}-vans-{_secrets.token_hex(5)}",
         }
+        ops = load_ops(ops_path)
+        if ops.get("ops_ntfy_topic"):
+            extras["ops_ntfy_topic"] = ops["ops_ntfy_topic"]
+            if ops.get("ops_ntfy_server"):
+                extras["ops_ntfy_server"] = ops["ops_ntfy_server"]
         settings = build_settings(intake, sheet_id)
         # Prove the camp's settings are valid BEFORE writing anything the app reads.
         try:

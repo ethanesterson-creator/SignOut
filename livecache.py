@@ -303,6 +303,17 @@ def _worker():
             time.sleep(min(1.5 * (2 ** min(job.tries - 1, 4)), 20))
 
 
+def failing_stores():
+    """[(store name, last error)] for every store whose latest refresh failed.
+    A store clears itself the next time a refresh succeeds."""
+    return [(s.name, s.last_error) for s in list(_STORES.values()) if s.last_error]
+
+
+def write_stats():
+    """Lifetime counters for the write queue: saves done, failed attempts."""
+    return dict(_stats)
+
+
 def pending_info():
     """(jobs not yet confirmed, age in seconds of the oldest, last error)."""
     with _cv:
