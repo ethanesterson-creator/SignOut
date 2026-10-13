@@ -39,6 +39,8 @@ Product name **Headcount**, domain **headcountcamp.com** (bought). Planned addre
 `demo.headcountcamp.com` for the demo, the bare domain for a landing page later. Still to do: trademark search
 (uspto.gov) before spending on a logo; professional email on the domain. The app itself still says "SignOut".
 
+- [x] Demo camp: separate Google project + Sheet created, seeded with 36 fake staff by `provision/seed_sheet.py`; verified locally (sign out 327 ms, sign in 277 ms). Next: deploy it on Render as `demo.headcountcamp.com`.
+
 ### Needs you (small)
 - [x] Ops channel + ntfy subscribed (done)
 - [x] Outside uptime checker (Better Stack free) on the Render trial (done)
