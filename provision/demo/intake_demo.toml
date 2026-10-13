@@ -1,0 +1,51 @@
+# A fake camp for demos: fake staff, fake name, nothing real. Safe to show anyone.
+camp_name = "Camp Demo"
+tagline = "Lakeville, NY &middot; Est. 1985"
+director_name = "Demo Director"
+director_email = "demo@example.com"
+timezone = "US/Eastern"
+logo_path = "logo-header-2.png"
+board_label = "The Main Lodge board"
+
+# Fill these two in once the demo's own (separate) Google service account and Sheet exist:
+service_account_json = ""
+spreadsheet_url = ""
+
+staff_csv = "provision/demo/staff.csv"
+
+vans = ["Van 1", "Van 2"]
+[van_labels]
+"Van 1" = "Van 1 (Blue)"
+"Van 2" = "Van 2 (Green)"
+
+[schedule]
+periods = [
+  ["Period 1", "09:00", "09:50"],
+  ["Period 2", "10:00", "10:50"],
+  ["Period 3", "11:00", "11:50"],
+  ["Rest Period", "13:00", "14:00"],
+  ["Period 4", "14:10", "15:00"],
+  ["Period 5", "15:10", "16:00"],
+]
+
+[[reasons]]
+name = "Period Off"
+rule = "period_end"
+grace_min = 5
+
+[[reasons]]
+name = "Night Off"
+rule = "next_clock"
+hour = 0
+minute = 15
+
+[[reasons]]
+name = "Day Off"
+rule = "day_after"
+hour = 7
+minute = 45
+nextday_cutoff_hour = 12
+
+[[reasons]]
+name = "Other (type reason)"
+rule = "none"
