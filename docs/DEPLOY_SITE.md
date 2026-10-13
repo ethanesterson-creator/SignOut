@@ -28,3 +28,11 @@ The screenshots in `site/img/` were captured at 1366x768 from the demo only. Nev
 - "Camps usually pay thousands to have a system like this built." (Your claim from earlier research; keep a source.)
 - "Up and running in days." (A promise about your setup time.)
 - Contact email: ethan.esterson@gmail.com.
+
+## Visit counter (Cloudflare Web Analytics, free)
+1. In Cloudflare, go to **Analytics & Logs**, then **Web Analytics**, then **Add a site**. Enter `headcountcamp.com`.
+2. Choose the JavaScript snippet option (you do not need to move your domain to Cloudflare). Copy the token from the snippet.
+3. In `site/index.html`, near the bottom, replace `PASTE_YOUR_TOKEN_HERE` with the token and remove the comment markers
+   around the script line. Commit and push to `main`.
+4. Cloudflare shows visits, countries and pages. It sets no cookies and collects no personal data, so no cookie banner is needed.
+   The token is not a secret (it is visible in the page source).
