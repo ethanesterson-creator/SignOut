@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import html as html_lib
 import threading
 import uuid
@@ -17,6 +18,7 @@ from google.oauth2.service_account import Credentials
 import camp_config
 import livecache
 import opswatch
+import ratelimit
 
 # =================================================
 # CAMP IDENTITY
@@ -1153,6 +1155,11 @@ def resolve_code(code: str, pin_lookup: dict):
     """
     if not str(code).strip():
         return None, "Enter your code."
+    # Guessing protection: after a burst of wrong codes, entry pauses briefly.
+    # The check happens BEFORE the lookup so a paused kiosk reveals nothing.
+    wait = ratelimit.CODES.remaining()
+    if wait:
+        return None, ratelimit.wait_message(wait)
     # Check both forms: whichever this staff row's pin cell was stored as.
     plain_matches = pin_lookup.get(normalize_pin(code), [])
     hash_matches = pin_lookup.get(hash_pin(code), [])
@@ -1160,8 +1167,20 @@ def resolve_code(code: str, pin_lookup: dict):
     if len(names) == 1:
         return names[0], None
     if len(names) == 0:
+        locked = ratelimit.CODES.fail()
+        if locked:
+            _report_code_lock("staff codes", locked)
         return None, "Code not recognized."
     return None, "This code is shared by more than one person. Ask the office for a unique code."
+
+
+def _report_code_lock(what: str, seconds: int):
+    """Tell the operator someone is guessing. Safe from any thread; never raises."""
+    opswatch.event(
+        "code_lock", "Repeated wrong codes",
+        f"Too many wrong {what} in a short time. Entry paused for {seconds} seconds. "
+        "If nobody at camp was mistyping, someone may be guessing.",
+    )
 
 
 def get_admin_names() -> set:
@@ -3790,11 +3809,17 @@ def page_admin_history(staff_pins: dict):
         col_pw_btn, _ = st.columns([1, 3])
         with col_pw_btn:
             if st.button("Unlock Admin", key="admin_pw_btn"):
-                if pw == ADMIN_PASSWORD and ADMIN_PASSWORD != "":
+                wait = ratelimit.ADMIN_PASSWORD.remaining()
+                if wait:
+                    st.error(ratelimit.wait_message(wait).replace("wrong codes", "wrong passwords"))
+                elif ADMIN_PASSWORD != "" and hmac.compare_digest(pw.encode(), ADMIN_PASSWORD.encode()):
                     st.session_state.admin_authenticated = True
                     st.success("Access granted.")
                     st.rerun()
                 else:
+                    locked = ratelimit.ADMIN_PASSWORD.fail()
+                    if locked:
+                        _report_code_lock("admin passwords", locked)
                     st.error("Incorrect password (or admin_password not set in secrets).")
         st.stop()
 
@@ -4626,9 +4651,6 @@ def _main_body():
         gc.freeze()
 
 
-_OPS = None
-
-
 def _ops_digest_text() -> str:
     """Morning check-in for the operator: alive, and how yesterday went."""
     ws = livecache.HANDLES.get(SHEET_LOGS)
@@ -4654,7 +4676,6 @@ def _ops_digest_text() -> str:
 
 def start_ops_watch():
     """Start the operator alerts, if this deployment has an ops topic."""
-    global _OPS
     if not CFG.ops_topic:
         return
     w = opswatch.Watchdog(CAMP_NAME, opswatch.ntfy_sender(CFG.ops_topic, CFG.ops_server))
@@ -4677,7 +4698,7 @@ def start_ops_watch():
     w.digest_fn = _ops_digest_text
     w.start()
     w.emit("Started", "The app just started (a deploy or a restart).", opswatch.PRIORITY_LOW, "rocket")
-    _OPS = w
+    opswatch.CURRENT = w
 
 
 def main():
@@ -4691,11 +4712,7 @@ def main():
     try:
         _main_body()
     except Exception as _err:
-        try:
-            if _OPS is not None:
-                _OPS.event("app_error", "App error", f"{type(_err).__name__}: {str(_err)[:300]}")
-        except Exception:
-            pass
+        opswatch.event("app_error", "App error", f"{type(_err).__name__}: {str(_err)[:300]}")
         try:
             st.markdown(
                 f"<div class='sg-fork' style='max-width:640px;margin:3rem auto;'>{flag('forgot', 40)}<div>"
