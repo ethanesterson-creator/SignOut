@@ -19,29 +19,43 @@ Sheet, which the camp edits.
 | Jun-Aug 2027 | Live; Ethan watches alerts |
 | Sep+ | Hibernate servers, archive, send renewals |
 
-## Status
+## Status (2026-10-13)
 
-Done:
+### Done
 - [x] Decisions: separate deployment + data per camp, per-summer price, Ethan operates
-- [x] `camp_config.py`: reasons + deadline rules, vans, schedule, thresholds, hours (merged)
-- [x] Onboarding generator `provision/new_camp.py` + intake form (merged)
-- [x] Host trial on Render (Starter, test sheet), `start.sh` + `docs/DEPLOY_RENDER.md` (merged)
-- [x] Operator alerts in the app (`opswatch.py`): Sheets unreachable, saves stuck, app errors,
-      start/restart notice, morning check-in; sent to a private ntfy topic tagged with the camp name
-      (branch `ops/alerts`, tested)
+- [x] `camp_config.py`: reasons + deadline rules, vans, schedule, thresholds, hours
+- [x] Onboarding generator `provision/new_camp.py` + intake form
+- [x] Hosting trial on Render Starter ($7/mo): memory flat ~150 MB of 512 MB, CPU ~0 -> **Starter is enough**
+- [x] `start.sh` + `docs/DEPLOY_RENDER.md`
+- [x] Operator alerts (`opswatch.py`): Sheets unreachable, saves stuck, app errors, restarts, morning check-in
+- [x] `stable` branch + update/rollback procedure (`docs/OPERATIONS.md`)
+- [x] Nightly backup script (`provision/backup_camp.py`), tested against the test Sheet
+- [x] Kiosk clock moved off Streamlit's deprecated embed to `st.iframe` (identical look, still ticking)
+- [x] Camp discovery script for calls and visits (`docs/CAMP_DISCOVERY.md`)
+- [x] Drafted: email to boss (ACA contact's address), email to the ACA contact (Ethan sends)
 
-Next, in order:
-- [ ] Merge `ops/alerts`; set your ops topic in `provision/ops.local.toml`; subscribe on your phone
-- [ ] Outside uptime check per camp (free service; catches "the whole app is down")
-- [ ] Trial results: Render memory graph + a day of uptime -> confirm Starter or move up/switch host
-- [ ] Staged updates: a `stable` branch for non-Bauercrest camps + rollback steps
-- [ ] Nightly Sheet backups per camp
-- [ ] Brand color per camp (theme.py is owned by the UI work; needs a coordinated change)
-- [ ] Replace `st.components.v1.html` (the kiosk clock): Streamlit says it is removed after
-      2026-06-01 and asks for `st.iframe`. Fine on the pinned version; must be done before upgrading Streamlit.
-- [ ] Name, domain, price, LLC, Stripe, terms + privacy page
-- [ ] ACA outreach, 2-3 pilot camps, demo video
-- [ ] First real onboarding (first test of a real service account + a camp's own Sheet)
+### Needs you (small)
+- [ ] Choose a long random ops channel name -> `provision/ops.local.toml`, subscribe in the ntfy app
+- [ ] Sign up for a free outside uptime checker (one check per camp, on `/_stcore/health`)
+- [ ] Schedule `backup_camp.py` nightly (Windows Task Scheduler) once a real camp exists
+- [ ] Point the Render trial service at `main` (Settings > Branch); keep or delete it
+- [ ] Send the two emails; record a 2-minute demo video
+- [ ] Name, domain, price, LLC, Stripe
+
+### Harder, in the order I'd do them
+1. **Code-guessing protection.** Today nothing limits wrong codes, and a camp's address is public.
+   A 4-digit code has only 10,000 possibilities. Add a process-wide limit (e.g. 10 wrong codes in 2
+   minutes pauses entry for a minute) plus an alert to you. Must not slow a counselor who mistypes once.
+2. **Camp look: colors + logo.** theme.py hardcodes Bauercrest navy in many places; make it driven
+   by a few per-camp colors without changing Bauercrest's look.
+3. **A public demo camp** with fake staff, for the ACA contact and pilots to click through.
+4. **Different schedule per day** (weekday/weekend/trip day). Wait for discovery calls to confirm demand.
+5. **Fleet view:** one page listing every camp, its version, last check-in and health.
+6. **Self-serve onboarding:** a form the director fills, that triggers the generator and deploy.
+7. **Billing and renewal:** Stripe subscription per summer, off-season hibernate, renewal reminders.
+8. **Legal:** terms of service, privacy policy, liability wording, insurance check.
+9. **Optional alert channels:** SMS/email to a camp director's own phone (cost per message).
+10. **Support:** a runbook of common fixes, a support inbox, a simple status page.
 
 ## Audit: what was Bauercrest-specific
 

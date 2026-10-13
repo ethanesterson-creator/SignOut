@@ -167,9 +167,7 @@ def inject_css():
 def kiosk_clock():
     """A live, ticking clock pinned to the header. Pure presentation: it runs in
     the browser so it never triggers a Streamlit rerun."""
-    import streamlit.components.v1 as components
-
-    components.html(
+    st.iframe(
         """<style>html,body{margin:0;background:transparent;font-family:'Schibsted Grotesk','Barlow',system-ui,sans-serif;color:#fff;text-align:right}
         #t{font:700 28px/1 'Big Shoulders Display','Arial Narrow',sans-serif;letter-spacing:.04em;font-variant-numeric:tabular-nums;text-shadow:0 4px 24px rgba(0,0,0,.5)}
         #d{font:500 11px/1.3 system-ui;letter-spacing:.16em;text-transform:uppercase;color:#B9C8E4;margin-top:2px}
