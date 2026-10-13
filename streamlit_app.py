@@ -16,6 +16,7 @@ from google.oauth2.service_account import Credentials
 
 import camp_config
 import livecache
+import opswatch
 
 # =================================================
 # CAMP IDENTITY
@@ -4524,6 +4525,8 @@ def _main_body():
     kiosk_clock()
     ensure_headers_once()
     livecache.prewarm()  # first load of every sheet at once, not one by one
+    if livecache.once("opswatch"):
+        start_ops_watch()
 
     logo_path = Path(CAMP_LOGO_PATH)
     if logo_path.exists():
@@ -4625,6 +4628,60 @@ def _main_body():
         gc.freeze()
 
 
+_OPS = None
+
+
+def _ops_digest_text() -> str:
+    """Morning check-in for the operator: alive, and how yesterday went."""
+    ws = livecache.HANDLES.get(SHEET_LOGS)
+    if ws is None:
+        return "Alive. (The log has not been read yet.)"
+    df = read_sheet_df(ws)
+    yday = (datetime.now(TZ) - timedelta(days=1)).date()
+    outs = ins = late = 0
+    if not df.empty and "timestamp" in df.columns:
+        ts = pd.to_datetime(df["timestamp"], errors="coerce")
+        day = df[ts.dt.date == yday]
+        action = day.get("action", pd.Series(dtype=str)).astype(str).str.upper()
+        outs = int((action == "OUT").sum())
+        ins = int((action == "IN").sum())
+        if "late" in day.columns:
+            late = int(((action == "IN") & (day["late"].astype(str).str.strip() != "")).sum())
+    stats = livecache.write_stats()
+    return (
+        f"Alive. Yesterday: {outs} sign-outs, {ins} sign-ins, {late} late. "
+        f"Since last restart: {stats['done']} saves to Sheets, {stats['failed_attempts']} retries."
+    )
+
+
+def start_ops_watch():
+    """Start the operator alerts, if this deployment has an ops topic."""
+    global _OPS
+    if not CFG.ops_topic:
+        return
+    w = opswatch.Watchdog(CAMP_NAME, opswatch.ntfy_sender(CFG.ops_topic, CFG.ops_server))
+
+    def sheets_ok():
+        bad = livecache.failing_stores()
+        if not bad:
+            return True, ""
+        names = ", ".join(n for n, _ in bad)
+        return False, f"Cannot read from Google Sheets: {names}. Last error: {bad[0][1][:200]}"
+
+    def saves_ok():
+        n, age, err = livecache.pending_info()
+        if n and age > 60:
+            return False, f"{n} sign-in/out saves are waiting to reach Sheets (oldest {int(age)}s). Last error: {err[:200]}"
+        return True, ""
+
+    w.add_probe("sheets", "Google Sheets not responding", sheets_ok)
+    w.add_probe("saves", "Saves are stuck", saves_ok)
+    w.digest_fn = _ops_digest_text
+    w.start()
+    w.emit("Started", "The app just started (a deploy or a restart).", opswatch.PRIORITY_LOW, "rocket")
+    _OPS = w
+
+
 def main():
     """Run the app behind a safety net.
 
@@ -4635,7 +4692,12 @@ def main():
     """
     try:
         _main_body()
-    except Exception:
+    except Exception as _err:
+        try:
+            if _OPS is not None:
+                _OPS.event("app_error", "App error", f"{type(_err).__name__}: {str(_err)[:300]}")
+        except Exception:
+            pass
         try:
             st.markdown(
                 f"<div class='sg-fork' style='max-width:640px;margin:3rem auto;'>{flag('forgot', 40)}<div>"

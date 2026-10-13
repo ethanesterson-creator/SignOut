@@ -131,6 +131,20 @@ def test_errors_are_plain_and_nothing_secret_is_written():
             raise AssertionError("duplicate names must be rejected")
 
 
+def test_operator_alert_channel_is_added_when_configured():
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        ops = tmp / "ops.toml"
+        ops.write_text('ops_ntfy_topic = "my-private-ops-topic"\n', encoding="utf-8")
+        res = new_camp.provision(_setup(tmp), str(tmp / "camps"), ops_path=str(ops))
+        sec = tomllib.loads((Path(res["dir"]) / "secrets.toml").read_text(encoding="utf-8"))
+        assert sec["ops_ntfy_topic"] == "my-private-ops-topic"
+        assert camp_config.load(sec).ops_topic == "my-private-ops-topic"
+        res2 = new_camp.provision(_setup(tmp), str(tmp / "camps2"), ops_path=str(tmp / "nope.toml"))
+        sec2 = tomllib.loads((Path(res2["dir"]) / "secrets.toml").read_text(encoding="utf-8"))
+        assert "ops_ntfy_topic" not in sec2   # no ops file: no ops alerts, nothing breaks
+
+
 if __name__ == "__main__":
     for k, v in sorted(globals().items()):
         if k.startswith("test_"):

@@ -21,21 +21,27 @@ Sheet, which the camp edits.
 
 ## Status
 
-- [x] Audit: what is Bauercrest-specific (below)
-- [x] `camp_config.py`: reasons + deadline rules, van purposes, default schedule, board
-      label, thresholds, hours, spreadsheet id guard. Defaults = Bauercrest, proven
-      identical to the old hardcoded rules by `tests/test_camp_config.py`.
+Done:
+- [x] Decisions: separate deployment + data per camp, per-summer price, Ethan operates
+- [x] `camp_config.py`: reasons + deadline rules, vans, schedule, thresholds, hours (merged)
+- [x] Onboarding generator `provision/new_camp.py` + intake form (merged)
+- [x] Host trial on Render (Starter, test sheet), `start.sh` + `docs/DEPLOY_RENDER.md` (merged)
+- [x] Operator alerts in the app (`opswatch.py`): Sheets unreachable, saves stuck, app errors,
+      start/restart notice, morning check-in; sent to a private ntfy topic tagged with the camp name
+      (branch `ops/alerts`, tested)
+
+Next, in order:
+- [ ] Merge `ops/alerts`; set your ops topic in `provision/ops.local.toml`; subscribe on your phone
+- [ ] Outside uptime check per camp (free service; catches "the whole app is down")
+- [ ] Trial results: Render memory graph + a day of uptime -> confirm Starter or move up/switch host
+- [ ] Staged updates: a `stable` branch for non-Bauercrest camps + rollback steps
+- [ ] Nightly Sheet backups per camp
 - [ ] Brand color per camp (theme.py is owned by the UI work; needs a coordinated change)
-- [x] Intake form (`provision/intake_template.toml`) and onboarding generator
-      (`provision/new_camp.py`): validates the intake, writes a ready `secrets.toml`
-      (random admin password, PIN salt and notification topics), staff import with
-      unique codes, the director email and a per-camp checklist. Never talks to Google.
-      Tested; also checked by booting the app as a fake "Camp Example".
-- [ ] Hosting chosen + one-command deploy of a camp's instance
-- [ ] Health reporting + alerts (uptime, app heartbeat, daily digest) to Ethan's phone
-- [ ] Staged updates (Bauercrest first) + rollback
-- [ ] Nightly Sheet backups
-- [ ] Pick product name + domain, host, price structure
+- [ ] Replace `st.components.v1.html` (the kiosk clock): Streamlit says it is removed after
+      2026-06-01 and asks for `st.iframe`. Fine on the pinned version; must be done before upgrading Streamlit.
+- [ ] Name, domain, price, LLC, Stripe, terms + privacy page
+- [ ] ACA outreach, 2-3 pilot camps, demo video
+- [ ] First real onboarding (first test of a real service account + a camp's own Sheet)
 
 ## Audit: what was Bauercrest-specific
 

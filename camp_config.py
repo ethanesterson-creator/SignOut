@@ -105,6 +105,11 @@ class CampConfig:
     auto_archive_hour: int = 3            # hour (0-23) old logs are archived
     archive_keep_days: int = 3
 
+    # operator alerts (see opswatch.py): a private ntfy topic that only the person
+    # running the app subscribes to. Empty = no operator alerts.
+    ops_topic: str = ""
+    ops_server: str = "https://ntfy.sh"
+
     @property
     def reason_names(self) -> list:
         return [r.name for r in self.reasons]
@@ -239,6 +244,8 @@ def load(secrets) -> CampConfig:
         nightly_summary_hour=_as_int(secrets, "nightly_summary_hour", d.nightly_summary_hour, 0, 23),
         auto_archive_hour=_as_int(secrets, "auto_archive_hour", d.auto_archive_hour, 0, 23),
         archive_keep_days=_as_int(secrets, "archive_keep_days", d.archive_keep_days, 1, 60),
+        ops_topic=str(_get(secrets, "ops_ntfy_topic", d.ops_topic)).strip(),
+        ops_server=str(_get(secrets, "ops_ntfy_server", d.ops_server)).strip() or d.ops_server,
     )
 
 
