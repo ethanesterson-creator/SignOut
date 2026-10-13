@@ -14,35 +14,46 @@ import gspread
 from gspread.exceptions import APIError, GSpreadException, WorksheetNotFound
 from google.oauth2.service_account import Credentials
 
+import camp_config
 import livecache
 
 # =================================================
 # CAMP IDENTITY
 # =================================================
-# Every value here is overridable via st.secrets so the same codebase can run
-# a different camp's deployment without touching a single line of code.
-CAMP_NAME = st.secrets.get("camp_name", "Camp Bauercrest")
-CAMP_TAGLINE = st.secrets.get("camp_tagline", "Amesbury, MA &middot; Est. 1931")
-CAMP_LOGO_PATH = st.secrets.get("camp_logo_path", "logo-header-2.png")
-CAMP_NOTIFY_PREFIX = st.secrets.get("camp_notify_prefix", "Bauercrest")
-CAMP_CSV_PREFIX = st.secrets.get("camp_csv_prefix", "bauercrest")
+# Everything that differs between camps is read once, here, from the
+# deployment's secrets (see camp_config.py for every setting and its default).
+# The same codebase runs any camp's deployment without a code change. A wrong
+# setting stops the app with a plain message instead of failing mysteriously
+# later on the kiosk.
+try:
+    CFG = camp_config.load(st.secrets)
+except camp_config.ConfigError as _cfg_err:
+    st.set_page_config(page_title="Setup needed")
+    st.error(f"This deployment is not set up correctly yet: {_cfg_err}")
+    st.stop()
+
+CAMP_NAME = CFG.name
+CAMP_TAGLINE = CFG.tagline
+CAMP_LOGO_PATH = CFG.logo_path
+CAMP_NOTIFY_PREFIX = CFG.notify_prefix
+CAMP_CSV_PREFIX = CFG.csv_prefix
 
 # Salt mixed into hashed PINs (see hash_pin below). Set pin_salt in secrets
 # per deployment so a leaked staff sheet from one camp can't be replayed
 # against another camp's hashes. An empty default still hashes (protecting
 # against someone with read access to the Sheet but not to secrets.toml),
 # it's just not camp-unique until a real salt is set.
-PIN_SALT = st.secrets.get("pin_salt", "")
+PIN_SALT = CFG.pin_salt
 
 # =================================================
 # TIMEZONE
 # =================================================
-TZ = pytz.timezone(st.secrets.get("camp_timezone", "US/Eastern"))
+TZ = pytz.timezone(CFG.timezone)
 
 # =================================================
 # CONFIG
 # =================================================
-SPREADSHEET_ID = "1oS7KMged-KMGkeT9BHq1He8_K1oXMNuCvWQig21S5Xg"
+SPREADSHEET_ID = CFG.spreadsheet_id
 
 SHEET_LOGS = "logs"
 SHEET_VANS = "vans"
@@ -59,7 +70,7 @@ AUDIT_LOG_HEADERS = ["id", "timestamp", "admin", "action", "detail"]
 # live tab, on top of keeping every row for anyone currently out. A day-off
 # cycle can span more than a day, so this buffer keeps recent completed
 # activity and any in-flight deadline visible in the app.
-ARCHIVE_KEEP_DAYS = 3
+ARCHIVE_KEEP_DAYS = CFG.archive_keep_days
 SHEET_SCHEDULE = "schedule"  # auto-created; period start/end times for Period Off deadlines
 
 # Auto-created; one row per person holding their LATEST status only. The logs
@@ -76,7 +87,7 @@ CURRENT_STATUS_HEADERS = ["name", "status", "reason", "other_reason", "timestamp
 # "Archive Old Logs Now". Deduped on the calendar date, same pattern as the
 # nightly summary, so it runs once a day no matter how many times the board
 # ticks after the hour.
-AUTO_ARCHIVE_HOUR = 3
+AUTO_ARCHIVE_HOUR = CFG.auto_archive_hour
 AUTO_ARCHIVE_KEY = "auto_archive_date"
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -86,15 +97,13 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 # anyway, so failing fast and recovering on the next tick beats a long hang.
 SHEETS_TIMEOUT_SECONDS = 10
 
-REASONS = ["Period Off", "Day Off", "Night Off", "Other (type reason)"]
+REASONS = CFG.reason_names
+OTHER_REASON = camp_config.OTHER_REASON
 
-# A camp's fleet size and van names/colors are its own, not Bauercrest's -
-# overridable via secrets (vans = [...], [van_labels] table) so a different
-# camp's deployment doesn't need a code change to add or rename a vehicle.
-VANS = list(st.secrets.get("vans", ["Van 1", "Van 2", "Van 3"]))
-VAN_LABELS = dict(st.secrets.get(
-    "van_labels", {"Van 1": "Van 1 (White)", "Van 2": "Van 2 (Black)", "Van 3": "Van 3 (Red)"}
-))
+# A camp's fleet size and van names/colors are its own (vans = [...] and the
+# [van_labels] table in secrets).
+VANS = list(CFG.vans)
+VAN_LABELS = dict(CFG.van_labels)
 
 
 def van_label(v: str) -> str:
@@ -110,7 +119,7 @@ def van_name_html(v: str) -> str:
     return html_lib.escape(label)
 
 
-VAN_PURPOSES = ["Period Off", "Night Off", "Day Off", "Field Trip", "Tournament", "Other"]
+VAN_PURPOSES = list(CFG.van_purposes)
 
 # Legacy tag from the old auto day-off feature. Kept only so old rows
 # display cleanly on the board. The app no longer writes these rows.
@@ -128,32 +137,13 @@ LOGS_HEADERS_REQUIRED = ["id", "timestamp", "name", "reason", "other_reason", "a
 # -------------------------------------------------
 # LATENESS RULES
 # -------------------------------------------------
-# Period Off: back 5 minutes before the period ends.
-PERIOD_OFF_GRACE_MIN = 5
-# Night Off: back by 12:15 AM the next morning.
-NIGHT_OFF_DUE = (0, 15)
-# Day Off: back by 7:45 AM the morning AFTER the day off.
-DAY_OFF_DUE = (7, 45)
-# A day off is a full calendar day. Sign out before noon and the day off is
-# that same day (you left in the morning to start it). Sign out at noon or
-# later and the day off is the NEXT day (you left during or after today for
-# tomorrow's day off). Either way you are due back the morning after the day
-# off. Example: out Tuesday 9:50 PM -> day off Wednesday -> back Thursday 7:45.
-DAY_OFF_NEXTDAY_CUTOFF_HOUR = 12
+# Which reasons exist and how each one sets a deadline is camp configuration
+# (the reasons table in secrets, see camp_config.py). compute_due_back below
+# applies them. Bauercrest's own rules are the defaults.
 
 # Default camp schedule, used if the schedule tab is missing or empty. The tab
 # wins when present, so the office can change times without touching the code.
-DEFAULT_SCHEDULE = [
-    ("Period 1", "09:15", "10:05"),
-    ("Period 2", "10:15", "11:05"),
-    ("Period 3", "11:15", "12:05"),
-    ("Rest Period", "13:00", "14:00"),
-    ("Period 4", "14:15", "15:05"),
-    ("Snack", "15:15", "15:30"),
-    ("Period 5", "15:40", "16:30"),
-    ("G-Swim", "16:30", "17:30"),
-    ("Free Play", "18:35", "19:15"),
-]
+DEFAULT_SCHEDULE = list(CFG.default_schedule)
 SCHEDULE_HEADERS = ["period", "start", "end"]
 
 # Pages that auto-refresh for the Big House kiosk. The sign-out form is
@@ -544,11 +534,9 @@ def get_gspread_client():
 @st.cache_resource
 def get_spreadsheet():
     client = get_gspread_client()
-    # secrets can override which sheet to open, so a local/test run can point
-    # at a copy of the spreadsheet without ever touching the production ID
-    # baked into the code above.
-    sheet_id = st.secrets.get("spreadsheet_id", SPREADSHEET_ID)
-    return client.open_by_key(sheet_id)
+    # The Sheet comes from the deployment's own secrets (spreadsheet_id), so a
+    # local/test run points at a copy without touching production.
+    return client.open_by_key(SPREADSHEET_ID)
 
 
 @st.cache_resource
@@ -826,53 +814,18 @@ def load_schedule():
     return _default_schedule()
 
 
-def _next_clock_time(now: datetime, hh: int, mm: int) -> datetime:
-    """The next moment the clock reads hh:mm, strictly after now."""
-    candidate = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-    if candidate <= now:
-        candidate = candidate + timedelta(days=1)
-    return candidate
-
-
 def compute_due_back(reason: str, now: datetime):
     """When this person must be signed back in. None means no deadline.
 
-    Period Off  -> 5 minutes before the period they are in ends. If they sign
-                   out between periods, the next period's end is used.
-    Night Off   -> 12:15 AM the next morning.
-    Day Off     -> 7:45 AM the morning after.
-    Anything else (Other, Van) -> no deadline.
+    How each reason sets its deadline is the camp's own configuration (see
+    camp_config.py). Bauercrest's rules:
+      Period Off  -> 5 minutes before the period they are in ends. If they sign
+                     out between periods, the next period's end is used.
+      Night Off   -> 12:15 AM the next morning.
+      Day Off     -> 7:45 AM the morning after.
+      Anything else (Other, Van) -> no deadline.
     """
-    reason = str(reason or "").strip()
-
-    if reason == "Night Off":
-        return _next_clock_time(now, *NIGHT_OFF_DUE)
-
-    if reason == "Day Off":
-        # Which calendar day is the day off?
-        day_off_date = now.date()
-        if now.hour >= DAY_OFF_NEXTDAY_CUTOFF_HOUR:
-            day_off_date = day_off_date + timedelta(days=1)
-        # Back the morning AFTER the day off.
-        due_date = day_off_date + timedelta(days=1)
-        hh, mm = DAY_OFF_DUE
-        naive = datetime.combine(due_date, dtime(hh, mm))
-        return TZ.localize(naive) if now.tzinfo else naive
-
-    if reason == "Period Off":
-        today = now.date()
-        for _name, start, end in load_schedule():
-            if not start or not end:
-                continue
-            end_dt = TZ.localize(datetime.combine(today, end)) if now.tzinfo else datetime.combine(today, end)
-            due = end_dt - timedelta(minutes=PERIOD_OFF_GRACE_MIN)
-            # The first period whose deadline is still ahead of them is theirs.
-            # That covers being mid-period and being in a gap between periods.
-            if due > now:
-                return due
-        return None  # signed out after the last period; no deadline to enforce
-
-    return None
+    return camp_config.due_back(CFG, reason, now, TZ, load_schedule)
 
 
 def parse_due(s):
@@ -939,13 +892,13 @@ LATE_ALERT_KEY = "late_alerted"
 # rather than being genuinely late. Their card drops to a separate zone at the
 # bottom of the board and stops showing a meaningless minute count. Nothing is
 # deleted. Change this one number to move the line.
-FORGOT_THRESHOLD_MINUTES = 180
+FORGOT_THRESHOLD_MINUTES = CFG.forgot_threshold_minutes
 
 # For reasons that carry no deadline (Other, Van), lateness is always 0, so the
 # forgot logic above can never flag them. If someone is out on one of those for
 # this many hours, it is almost certainly a forgotten sign-in, so the sign
 # fork still steps in. Long enough that an all-day errand does not trip it.
-FORK_NO_DEADLINE_HOURS = 14
+FORK_NO_DEADLINE_HOURS = CFG.fork_no_deadline_hours
 
 
 def is_surprising_signin(info: dict, when=None) -> bool:
@@ -1026,7 +979,7 @@ def check_late_and_alert(df_out: pd.DataFrame):
 # per night at this hour (24-hour clock, 0 = midnight). Change this one number
 # to move it. NOTE: hour must be 0-23; datetime.hour never reaches 24, so a
 # value of 24 here made this check always true and the summary never sent.
-NIGHTLY_SUMMARY_HOUR = 0
+NIGHTLY_SUMMARY_HOUR = CFG.nightly_summary_hour
 NIGHTLY_SUMMARY_KEY = "nightly_summary_date"
 
 
@@ -2993,7 +2946,7 @@ def render_stale_fork(reason: str, other_reason: str):
 
     with c2:
         if st.button("Signing OUT (leaving now)", key="fork_out", use_container_width=True):
-            if reason == "Other (type reason)" and not other_reason.strip():
+            if reason == OTHER_REASON and not other_reason.strip():
                 st.session_state["fork_error"] = "Pick a reason above first, then tap Signing OUT."
                 st.rerun()
             # Close the forgotten sign-out quietly, then open a fresh one now, so
@@ -3013,7 +2966,7 @@ def render_stale_fork(reason: str, other_reason: str):
             st.session_state.pop("pending_fork", None)
             st.session_state["log_flash_kind"] = "out"
             st.session_state["log_flash_word"] = f"{name.upper()} IS SIGNED OUT"
-            shown = reason if reason != "Other (type reason)" else other_reason
+            shown = reason if reason != OTHER_REASON else other_reason
             st.session_state["log_flash"] = f"Got it. Signed you OUT now for {shown}. Your forgotten sign-in was cleaned up."
             st.session_state["signio_nonce"] += 1
             st.rerun()
@@ -3159,13 +3112,13 @@ def _signio_submit(staff_pins: dict, n: int):
             msg = "Welcome back to camp."
         _flash(msg, "in", f"{name.upper()} IS SIGNED IN")
         st.session_state["signio_nonce"] += 1
-    elif reason == "Other (type reason)" and not other_reason.strip():
+    elif reason == OTHER_REASON and not other_reason.strip():
         st.session_state["signio_error"] = "Please type a reason for 'Other'."
     else:
         due = compute_due_back(reason, datetime.now(TZ))
         new_id = append_log_row(name, reason, other_reason, action="OUT", status="OUT", due_back=due)
         set_pending_undo(new_id, f"{name}'s sign-out", name=name, prev=info)
-        shown = reason if reason != "Other (type reason)" else other_reason
+        shown = reason if reason != OTHER_REASON else other_reason
         _flash(
             f"Reason: {shown}. Sign back in when you return.",
             "out",
@@ -3244,7 +3197,7 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     # bold headline across several lines.
     pending_reason = st.session_state.get("signout_reason", REASONS[0])
     pending_other = st.session_state.get(f"signout_other_reason_{n}", "").strip()
-    if pending_reason != "Other (type reason)":
+    if pending_reason != OTHER_REASON:
         reason_line = pending_reason
     elif pending_other:
         reason_line = pending_other
@@ -3280,7 +3233,7 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
     with rc:
         reason = st.selectbox("Reason (only used if you are signing OUT)", REASONS, key="signout_reason")
         other_reason = ""
-        if reason == "Other (type reason)":
+        if reason == OTHER_REASON:
             # Nonce-scoped, unlike the reason dropdown above. A shared dropdown
             # value ("Night Off") commonly applies to the next person too, but a
             # typed detail ("dentist appointment") almost never does, and being
@@ -3325,7 +3278,7 @@ def whos_out_empty():
 
 
 def page_whos_out():
-    page_title("The Big House board", "Who's Out")
+    page_title(CFG.board_label, "Who's Out")
 
     @st.fragment(run_every=BOARD_REFRESH_SECONDS)
     def live_board():
