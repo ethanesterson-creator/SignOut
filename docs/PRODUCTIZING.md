@@ -34,13 +34,19 @@ Sheet, which the camp edits.
 - [x] Camp discovery script for calls and visits (`docs/CAMP_DISCOVERY.md`)
 - [x] Drafted: email to boss (ACA contact's address), email to the ACA contact (Ethan sends)
 
+### Brand (decided 2026-10-13)
+Product name **Headcount**, domain **headcountcamp.com** (bought). Planned addresses: `<camp>.headcountcamp.com` per camp,
+`demo.headcountcamp.com` for the demo, the bare domain for a landing page later. Still to do: trademark search
+(uspto.gov) before spending on a logo; professional email on the domain. The app itself still says "SignOut".
+
 ### Needs you (small)
-- [ ] Choose a long random ops channel name -> `provision/ops.local.toml`, subscribe in the ntfy app
-- [ ] Sign up for a free outside uptime checker (one check per camp, on `/_stcore/health`)
+- [x] Ops channel + ntfy subscribed (done)
+- [x] Outside uptime checker (Better Stack free) on the Render trial (done)
 - [ ] Schedule `backup_camp.py` nightly (Windows Task Scheduler) once a real camp exists
-- [ ] Point the Render trial service at `main` (Settings > Branch); keep or delete it
+- [x] Render trial follows `main` (done)
 - [ ] Send the two emails; record a 2-minute demo video
-- [ ] Name, domain, price, LLC, Stripe
+- [x] Name + domain (Headcount / headcountcamp.com)
+- [ ] Price, LLC, Stripe
 
 ### Harder, in the order I'd do them
 1. ~~Code-guessing protection~~ **Built (branch `security/code-guess-limit`), tested live.** 10 wrong codes in 2
