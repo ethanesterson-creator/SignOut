@@ -151,6 +151,8 @@ p { margin: 0; }
 .statement-grid { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: clamp(28px, 6vw, 88px); align-items: end; }
 .statement-line { font-family: var(--display); font-weight: 800; text-transform: uppercase; font-size: clamp(1.9rem, 4.2vw, 3.6rem); line-height: 1; max-width: 22ch; }
 .statement-line span { color: var(--muted); }
+.founder { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 22px; align-items: center; }
+.founder-photo { width: 112px; height: 112px; object-fit: cover; border-radius: var(--radius-img); box-shadow: var(--shadow); }
 .founder p { color: var(--muted); max-width: 44ch; }
 .founder .sign { font-family: var(--display); font-weight: 800; text-transform: uppercase; font-size: 1.7rem; line-height: 1; color: var(--ink); margin-top: 14px; }
 
@@ -161,6 +163,7 @@ section { scroll-margin-top: 76px; }
 .sec-head { margin-bottom: clamp(36px, 5vw, 64px); }
 .sec-head h2 { max-width: 14ch; }
 h2.quiet { font-size: clamp(2rem, 3.8vw, 3.1rem); }
+.setup-note { margin-top: 22px; max-width: 30ch; }
 .body-copy.big { font-size: 1.2rem; max-width: 46ch; align-self: center; }
 
 /* Bento: four cells, 7+5 over 5+7 */

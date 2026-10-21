@@ -41,6 +41,9 @@ Product name **Headcount**, domain **headcountcamp.com** (bought). Planned addre
 
 - [x] Demo camp: separate Google project + Sheet created, seeded with 36 fake staff by `provision/seed_sheet.py`; verified locally (sign out 327 ms, sign in 277 ms). Next: deploy it on Render as `demo.headcountcamp.com`.
 
+- [x] Website polished with taste audit + impeccable + council; Camp Bauercrest named (director OK), founder photo added (2026-10-20)
+- [x] Decision: no free pilot
+
 ### Needs you (small)
 - [x] Ops channel + ntfy subscribed (done)
 - [x] Outside uptime checker (Better Stack free) on the Render trial (done)
