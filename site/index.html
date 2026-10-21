@@ -6,6 +6,7 @@
 <title>Headcount: staff sign-out for summer camps</title>
 <meta name="description" content="Headcount shows a summer camp who is off camp, where, and who is late. Staff sign out with a four-digit code. Set up for you, priced for camps.">
 <meta name="color-scheme" content="light dark">
+<meta name="author" content="Ethan Esterson">
 <meta name="theme-color" content="#f3f6fb" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#081327" media="(prefers-color-scheme: dark)">
 <meta property="og:type" content="website">
@@ -72,10 +73,13 @@
 
   <section class="statement">
     <div class="wrap statement-grid">
-      <p class="statement-line">Built at a summer camp. <span>Used every day by about 60 counselors.</span></p>
+      <p class="statement-line">Built at Camp Bauercrest. <span>Used every day by about 60 counselors.</span></p>
       <div class="founder">
-        <p>I'm Ethan Esterson, an engineering student at the University of Florida. I built Headcount for the camp where I work, and I will set it up for yours myself.</p>
-        <p class="sign">Ethan Esterson</p>
+        <img class="founder-photo" src="img/ethan.webp" width="560" height="560" alt="Ethan Esterson, smiling, in a navy suit" loading="lazy">
+        <div>
+          <p>I'm Ethan Esterson, an engineering student at the University of Florida. I built Headcount for Camp Bauercrest in Amesbury, Massachusetts, where I work, and I will set it up for yours myself.</p>
+          <p class="sign">Ethan Esterson</p>
+        </div>
       </div>
     </div>
   </section>
@@ -96,7 +100,7 @@
         <article class="cell c-b reveal" style="--i:1">
           <div class="txt">
             <h3>Sign out in seconds.</h3>
-            <p>A counselor types a four-digit code and taps once. The same code brings them back.</p>
+            <p>A counselor types a four-digit code on the shared computer at your front desk and taps once. The same code brings them back.</p>
           </div>
           <div class="shot"><div class="crop" style="--x:-28.6%;--y:-12%"><img src="img/signout-banner.webp" width="2049" height="1152" alt="The confirmation after a counselor signs out, with an undo button." loading="lazy"></div></div>
         </article>
@@ -122,6 +126,7 @@
     <div class="wrap setup-grid">
       <div>
         <h2>Up and running in days.</h2>
+        <p class="body-copy setup-note">Start this winter or spring and be ready before opening day.</p>
       </div>
       <ol class="setup-list">
         <li class="reveal">
@@ -146,7 +151,7 @@
         <h2 class="quiet">Built around your camp, not ours.</h2>
       </div>
       <div class="fit-grid">
-        <div><h3>Your words</h3><p>Call it Period Off, Town Run or Free Time. Your camp's name and logo sit on every screen.</p></div>
+        <div><h3>Your words</h3><p>A reason is what staff pick when they leave: a period off, a night off, a town run. You name them. Your camp's name and logo sit on every screen.</p></div>
         <div><h3>Your deadlines</h3><p>Each reason gets its own return time: before the period ends, by curfew, or the morning after a day off.</p></div>
         <div><h3>Your schedule</h3><p>Enter your periods and the board knows what is on right now and who is overdue.</p></div>
         <div><h3>Your staff list</h3><p>Add or remove people any time, right in your own Sheet.</p></div>
@@ -189,9 +194,11 @@
       <div class="faq-list">
         <details><summary>Do we need to install anything?</summary><p>No. Headcount runs in a web browser on a computer you already have, such as the one at your front desk.</p></details>
         <details><summary>Does it track campers?</summary><p>No. Headcount is for staff only.</p></details>
-        <details><summary>Where does our data live?</summary><p>In a Google Sheet that you own. Each camp has its own, and nothing is shared between camps. We store names, codes in scrambled form, and sign-out records.</p></details>
-        <details><summary>What if the internet goes down?</summary><p>The kiosk needs a connection to reach the board. If Google is slow or unreachable, sign-outs are held and saved as soon as it recovers.</p></details>
-        <details><summary>Is it a safety system?</summary><p>No. It is a tool for knowing where staff are. It does not replace your emergency procedures.</p></details>
+        <details><summary>Why not a paper sheet or a Google Form?</summary><p>A paper sheet cannot tell you who is late, and nobody can read it from across camp. Headcount shows everyone on one screen and alerts the director when someone is overdue.</p></details>
+        <details><summary>Where does our data live, and who can see it?</summary><p>In a Google Sheet in your own Google account. Each camp has its own, and nothing is shared between camps. Headcount reaches your Sheet through an account you can remove at any time. We store names, reasons, times, and each staff code in scrambled form, so nobody reading the Sheet can see a code. We do not store campers, home addresses or phone numbers.</p></details>
+        <details><summary>What if you are unavailable?</summary><p>I run Headcount myself, and I get an alert on my phone if your board has a problem, so I often know before you do. You always keep your records, because they live in your own Google Sheet. If I ever stopped, you could remove my access and keep every record.</p></details>
+        <details><summary>What if the internet goes down?</summary><p>If Google is slow or unreachable, Headcount keeps trying and saves each sign-out the moment it can. If the kiosk computer itself loses its internet connection, it cannot load the board until it reconnects.</p></details>
+        <details><summary>Is it a safety system?</summary><p>No. It shows where your staff say they are, and who is overdue. It does not replace your emergency procedures.</p></details>
       </div>
     </div>
   </section>
@@ -214,7 +221,7 @@
 
 <footer>
   <div class="wrap foot">
-    <span>Headcount, made by Ethan Esterson</span>
+    <span>Headcount, made by Ethan Esterson at Camp Bauercrest</span>
     <span>University of Florida engineering student</span>
   </div>
 </footer>
