@@ -36,3 +36,9 @@ The screenshots in `site/img/` were captured at 1366x768 from the demo only. Nev
    around the script line. Commit and push to `main`.
 4. Cloudflare shows visits, countries and pages. It sets no cookies and collects no personal data, so no cookie banner is needed.
    The token is not a secret (it is visible in the page source).
+
+## After you change styles.css or script.js
+Run `.venv/Scripts/python.exe site/stamp_assets.py` before committing. It puts a short hash on the stylesheet and
+script links so browsers and Render's CDN always fetch the new files together with the new page. If the live site ever
+looks oddly sized or unstyled right after a deploy, it is almost always a mismatch like this: hard refresh with
+Ctrl+Shift+R.
