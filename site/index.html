@@ -6,6 +6,8 @@
 <title>Headcount: staff sign-out for summer camps</title>
 <meta name="description" content="Headcount shows a summer camp who is off camp, where, and who is late. Staff sign out with a four-digit code. Set up for you, priced for camps.">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f3f6fb" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#081327" media="(prefers-color-scheme: dark)">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Headcount: staff sign-out for summer camps">
 <meta property="og:description" content="Know where every counselor is. Staff sign out with a four-digit code, and the office sees who is off camp and who is late.">
@@ -26,7 +28,7 @@
     <nav class="nav-links" aria-label="Sections">
       <a href="#what">What it does</a>
       <a href="#setup">Setup</a>
-      <a href="#pricing">Pricing</a>
+      <a href="#pricing">Pilot</a>
       <a href="#questions">Questions</a>
     </nav>
     <a class="btn btn-primary" href="https://demo.headcountcamp.com">Try the demo</a>
@@ -46,28 +48,35 @@
       </div>
 
       <div class="stage-wrap">
-        <div class="stage" id="stage" role="group" aria-roledescription="carousel" aria-label="Screens from Headcount">
-          <figure class="slide is-active" id="s0"><img src="img/whos-out.webp" width="2049" height="1152" alt="The Who's Out board with two counselors marked late in red, others signed out for a day off, a dentist visit, a van trip and a night off." fetchpriority="high"></figure>
-          <figure class="slide" id="s1"><img src="img/signout-banner.webp" width="2049" height="1152" alt="The sign-in screen confirming that a counselor is signed out, with an undo button and the list of who is out right now." loading="lazy"></figure>
-          <figure class="slide" id="s2"><img src="img/vans.webp" width="2049" height="1152" alt="The vans screen showing one van out with its driver and three quarters of a tank of gas, and one van at camp." loading="lazy"></figure>
-          <figure class="slide" id="s3"><img src="img/emergency.webp" width="2049" height="1152" alt="A red campwide emergency banner with a message from the director shown across the top of the sign-in screen." loading="lazy"></figure>
-          <figure class="slide" id="s4"><img src="img/group.webp" width="2049" height="1152" alt="The group sign-out screen where one leader signs out a whole group for a field trip." loading="lazy"></figure>
+        <div class="stage" id="stage" aria-label="Screens from Headcount">
+          <figure class="slide is-active" id="s0" role="tabpanel" aria-labelledby="t0"><img src="img/whos-out.webp" width="2049" height="1152" alt="The Who's Out board with two counselors marked late in red, others signed out for a day off, a dentist visit, a van trip and a night off." fetchpriority="high"></figure>
+          <figure class="slide" id="s1" role="tabpanel" aria-labelledby="t1" aria-hidden="true"><img src="img/signout-banner.webp" width="2049" height="1152" alt="The sign-in screen confirming that a counselor is signed out, with an undo button and the list of who is out right now." loading="lazy"></figure>
+          <figure class="slide" id="s2" role="tabpanel" aria-labelledby="t2" aria-hidden="true"><img src="img/vans.webp" width="2049" height="1152" alt="The vans screen showing one van out with its driver and three quarters of a tank of gas, and one van at camp." loading="lazy"></figure>
+          <figure class="slide" id="s3" role="tabpanel" aria-labelledby="t3" aria-hidden="true"><img src="img/emergency.webp" width="2049" height="1152" alt="A red campwide emergency banner with a message from the director shown across the top of the sign-in screen." loading="lazy"></figure>
+          <figure class="slide" id="s4" role="tabpanel" aria-labelledby="t4" aria-hidden="true"><img src="img/group.webp" width="2049" height="1152" alt="The group sign-out screen where one leader signs out a whole group for a field trip." loading="lazy"></figure>
         </div>
-        <div class="tabs" role="tablist" aria-label="Choose a screen">
-          <button class="tab" role="tab" aria-selected="true" aria-controls="s0" type="button">Who's out</button>
-          <button class="tab" role="tab" aria-selected="false" aria-controls="s1" type="button">Sign out</button>
-          <button class="tab" role="tab" aria-selected="false" aria-controls="s2" type="button">Vans</button>
-          <button class="tab" role="tab" aria-selected="false" aria-controls="s3" type="button">Emergency</button>
-          <button class="tab" role="tab" aria-selected="false" aria-controls="s4" type="button">Groups</button>
-          <button class="tab pause" id="pause" type="button" aria-pressed="false">Pause</button>
+        <div class="tabs">
+          <div class="tablist" role="tablist" aria-label="Choose a screen">
+            <button class="tab" role="tab" id="t0" aria-selected="true" aria-controls="s0" type="button">Who's out</button>
+            <button class="tab" role="tab" id="t1" aria-selected="false" aria-controls="s1" tabindex="-1" type="button">Sign out</button>
+            <button class="tab" role="tab" id="t2" aria-selected="false" aria-controls="s2" tabindex="-1" type="button">Vans</button>
+            <button class="tab" role="tab" id="t3" aria-selected="false" aria-controls="s3" tabindex="-1" type="button">Emergency</button>
+            <button class="tab" role="tab" id="t4" aria-selected="false" aria-controls="s4" tabindex="-1" type="button">Groups</button>
+          </div>
+          <button class="pause" id="pause" type="button" aria-pressed="false">Pause</button>
         </div>
+        <p class="stage-note">Real screens from the demo camp, with made-up staff. Open the demo to click through them yourself.</p>
       </div>
     </div>
   </section>
 
   <section class="statement">
-    <div class="wrap reveal">
-      <p>Built at a Massachusetts summer camp. <span>Used every day by about 60 counselors.</span></p>
+    <div class="wrap statement-grid">
+      <p class="statement-line">Built at a summer camp. <span>Used every day by about 60 counselors.</span></p>
+      <div class="founder">
+        <p>I'm Ethan Esterson, an engineering student at the University of Florida. I built Headcount for the camp where I work, and I will set it up for yours myself.</p>
+        <p class="sign">Ethan Esterson</p>
+      </div>
     </div>
   </section>
 
@@ -80,8 +89,7 @@
         <article class="cell c-a reveal">
           <div class="txt">
             <h3>A board you can read from across the room.</h3>
-            <p>Who is out, why, since when, and who is late. It refreshes on its own, so nobody has to ask.</p>
-            <span class="late-note">The director's phone gets an alert when someone is late.</span>
+            <p>Who is out, why, since when, and who is late. It refreshes on its own, so nobody has to ask. When someone is overdue, the director's phone gets an alert, so nobody has to check.</p>
           </div>
           <div class="shot"><img src="img/whos-out.webp" width="2049" height="1152" alt="The Who's Out board with late counselors highlighted in red." loading="lazy"></div>
         </article>
@@ -110,9 +118,9 @@
     </div>
   </section>
 
-  <section class="sec" id="setup" style="padding-top:0">
+  <section class="sec flush" id="setup">
     <div class="wrap setup-grid">
-      <div class="reveal">
+      <div>
         <h2>Up and running in days.</h2>
       </div>
       <ol class="setup-list">
@@ -122,7 +130,7 @@
         </li>
         <li class="reveal" style="--i:1">
           <h3>Share a Google Sheet.</h3>
-          <p>You create a blank Sheet and share it with us. It lives in your Google account and stays yours.</p>
+          <p>You create a blank Sheet and share it with us. We build the rest inside it.</p>
         </li>
         <li class="reveal" style="--i:2">
           <h3>Hand out the codes.</h3>
@@ -134,41 +142,33 @@
 
   <section class="sec fit" id="fit">
     <div class="wrap">
-      <div class="sec-head reveal">
-        <h2>Built around your camp, not ours.</h2>
+      <div class="sec-head">
+        <h2 class="quiet">Built around your camp, not ours.</h2>
       </div>
       <div class="fit-grid">
-        <div class="reveal"><h3>Your words</h3><p>Call it Period Off, Town Run or Free Time. You name the reasons staff can pick.</p></div>
-        <div class="reveal" style="--i:1"><h3>Your deadlines</h3><p>Each reason gets its own return time: before the period ends, by curfew, or the morning after a day off.</p></div>
-        <div class="reveal"><h3>Your schedule</h3><p>Enter your periods and the board knows what is on right now and who is overdue.</p></div>
-        <div class="reveal" style="--i:1"><h3>Your vans</h3><p>Track the vans or buses you drive, each with its own name.</p></div>
-        <div class="reveal"><h3>Your name and logo</h3><p>Your camp's name and logo sit on every screen.</p></div>
-        <div class="reveal" style="--i:1"><h3>Your staff list</h3><p>Add or remove people any time, right in your own Sheet.</p></div>
+        <div><h3>Your words</h3><p>Call it Period Off, Town Run or Free Time. Your camp's name and logo sit on every screen.</p></div>
+        <div><h3>Your deadlines</h3><p>Each reason gets its own return time: before the period ends, by curfew, or the morning after a day off.</p></div>
+        <div><h3>Your schedule</h3><p>Enter your periods and the board knows what is on right now and who is overdue.</p></div>
+        <div><h3>Your staff list</h3><p>Add or remove people any time, right in your own Sheet.</p></div>
       </div>
     </div>
   </section>
 
   <section class="sec data" id="data">
     <div class="wrap setup-grid">
-      <div class="reveal">
+      <div>
         <h2>Your records stay yours.</h2>
-        <p class="body-copy" style="margin-top:24px">Every camp gets its own copy of Headcount, with its own Google Sheet in your own Google account. If you ever stop, you keep every record.</p>
       </div>
-      <ul class="setup-list" style="list-style:none">
-        <li class="reveal"><h3>Your own copy</h3></li>
-        <li class="reveal" style="--i:1"><h3>Your own Google Sheet</h3></li>
-        <li class="reveal" style="--i:2"><h3>Nothing shared between camps</h3></li>
-      </ul>
+      <p class="body-copy big">Every camp gets its own copy of Headcount and its own Google Sheet in your own Google account. Nothing is shared between camps. If you ever stop, you keep every record.</p>
     </div>
   </section>
 
-  <section class="sec" id="pricing" style="padding-top:0">
+  <section class="sec flush" id="pricing">
     <div class="wrap">
-      <div class="price-panel reveal">
+      <div class="price-panel">
         <div>
-          <span class="tag">Pilot summer 2027</span>
           <h2>A fraction of what custom software costs.</h2>
-          <p>Camps usually pay thousands to have a system like this built. We set Headcount up for you and charge a low price per summer. Pilot camps get the lowest price we will ever offer.</p>
+          <p>Pilot summer 2027. Camps usually pay thousands to have a system like this built. We set Headcount up for you and charge a low price per summer, and pilot camps get the lowest price we will ever offer.</p>
         </div>
         <div>
           <ul>
@@ -177,18 +177,19 @@
             <li>Support from the person who built it</li>
           </ul>
           <a class="btn btn-light" href="mailto:ethan.esterson@gmail.com?subject=Headcount%20pilot">Ask about a pilot</a>
+          <p class="price-next">Send a note and we will set up a 15-minute call.</p>
         </div>
       </div>
     </div>
   </section>
 
-  <section class="sec" id="questions" style="padding-top:0">
+  <section class="sec flush" id="questions">
     <div class="wrap">
-      <div class="sec-head reveal"><h2>Questions camps ask.</h2></div>
-      <div class="faq-list reveal">
+      <div class="sec-head"><h2 class="quiet">Questions camps ask.</h2></div>
+      <div class="faq-list">
         <details><summary>Do we need to install anything?</summary><p>No. Headcount runs in a web browser on a computer you already have, such as the one at your front desk.</p></details>
         <details><summary>Does it track campers?</summary><p>No. Headcount is for staff only.</p></details>
-        <details><summary>Where does our data live?</summary><p>In a Google Sheet that you own. Each camp has its own, and nothing is shared between camps. We store names, scrambled codes and sign-out records.</p></details>
+        <details><summary>Where does our data live?</summary><p>In a Google Sheet that you own. Each camp has its own, and nothing is shared between camps. We store names, codes in scrambled form, and sign-out records.</p></details>
         <details><summary>What if the internet goes down?</summary><p>The kiosk needs a connection to reach the board. If Google is slow or unreachable, sign-outs are held and saved as soon as it recovers.</p></details>
         <details><summary>Is it a safety system?</summary><p>No. It is a tool for knowing where staff are. It does not replace your emergency procedures.</p></details>
       </div>
@@ -197,15 +198,16 @@
 
   <section class="sec final" id="contact">
     <div class="wrap final-grid">
-      <div class="reveal">
+      <div>
         <h2>See it for yourself.</h2>
-        <p class="body-copy">The demo runs on made-up staff. Ask for a demo code and you can sign someone out yourself.</p>
+        <p class="body-copy">Click through the demo freely, with made-up staff. To sign someone out yourself, ask for a demo code.</p>
         <div class="cta-row">
           <a class="btn btn-primary" href="https://demo.headcountcamp.com">Try the demo</a>
           <a class="btn btn-ghost" href="mailto:ethan.esterson@gmail.com?subject=Headcount%20pilot">Ask about a pilot</a>
         </div>
+        <p class="direct">Or write to <a href="mailto:ethan.esterson@gmail.com">ethan.esterson@gmail.com</a></p>
       </div>
-      <div class="reveal" style="--i:1"><img class="final-shot" src="img/signin.webp" width="2049" height="1152" alt="The Headcount sign-in screen with a code box and the list of who is signed out right now." loading="lazy"></div>
+      <div><img class="final-shot" src="img/signin.webp" width="2049" height="1152" alt="The Headcount sign-in screen with a code box and the list of who is signed out right now." loading="lazy"></div>
     </div>
   </section>
 </main>
@@ -213,7 +215,7 @@
 <footer>
   <div class="wrap foot">
     <span>Headcount, made by Ethan Esterson</span>
-    <a href="mailto:ethan.esterson@gmail.com">ethan.esterson@gmail.com</a>
+    <span>University of Florida engineering student</span>
   </div>
 </footer>
 
