@@ -613,8 +613,8 @@ def bootstrap_new_camp_sheets() -> list:
 
     # These five have no auto-create-on-first-read getter elsewhere in the
     # app, so a brand new spreadsheet needs them built by hand today.
-    _create(SHEET_STAFF, ["name", "pin", "active", "admin"])
-    _create(SHEET_DRIVERS, ["name", "passed_test"])
+    _create(SHEET_STAFF, ["name", "pin", "active", "admin"] + (["phone", "email"] if CFG.staff_directory else []))
+    _create(SHEET_DRIVERS, ["name", "passed_test"] + (["certified_on", "expires_on"] if CFG.driver_cert_tracking else []))
     _create(SHEET_DAYS_OFF, ["name", "weekday", "active"])
     _create(SHEET_LOGS, LOGS_HEADERS_REQUIRED)
     _create(SHEET_VANS, VANS_HEADERS_REQUIRED)
@@ -3732,6 +3732,15 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                     st.error("This code is not cleared to drive a van.")
                     return
 
+                if CFG.driver_cert_tracking:
+                    cert, expires = driver_cert_status(driver)
+                    if cert == camp_config.CERT_EXPIRED:
+                        st.error(
+                            f"Your driver certification ended {expires.strftime('%b %d, %Y').replace(' 0', ' ')}. "
+                            "See the office before taking a van."
+                        )
+                        return
+
                 # Guard against two people grabbing the same van at once. The
                 # first checkout is recorded in memory the instant it happens
                 # (see append_vans_row), so the second one sees the van as OUT
@@ -3894,6 +3903,120 @@ def page_group_signout(staff_pins: dict, staff_names: list):
                 st.rerun()
 
     crest_footer()
+
+
+def _to_date(value):
+    """A sheet cell (2026-06-01, 6/1/2026, ...) as a date, or None if blank or unreadable."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        ts = pd.to_datetime(text, errors="coerce")
+    except Exception:
+        return None
+    return None if pd.isna(ts) else ts.date()
+
+
+def driver_cert_table() -> pd.DataFrame:
+    """Every cleared driver with their certification dates and standing today."""
+    cols = ["Driver", "Certified on", "Expires", "Status"]
+    try:
+        drivers = load_drivers_df_cached()
+    except Exception:
+        return pd.DataFrame(columns=cols)
+    drivers = drivers[drivers["passed_test"]]
+    today = datetime.now(TZ).date()
+    rows = []
+    for _, r in drivers.iterrows():
+        expires = _to_date(r.get("expires_on", ""))
+        certified = _to_date(r.get("certified_on", ""))
+        status = camp_config.cert_status(expires, today, CFG.driver_cert_warn_days)
+        rows.append({
+            "Driver": r["name"],
+            "Certified on": certified.isoformat() if certified else "",
+            "Expires": expires.isoformat() if expires else "",
+            "Status": {"valid": "Valid", "expiring": "Expiring soon", "expired": "EXPIRED", "missing": "No date on file"}[status],
+            "_order": {"expired": 0, "expiring": 1, "missing": 2, "valid": 3}[status],
+        })
+    df = pd.DataFrame(rows, columns=cols + ["_order"])
+    return df.sort_values(["_order", "Driver"]).drop(columns="_order").reset_index(drop=True)
+
+
+def driver_cert_status(name: str):
+    """(status, expires date) for one driver, using the camp's drivers tab."""
+    try:
+        drivers = load_drivers_df_cached()
+        row = drivers[drivers["name"] == name]
+        expires = _to_date(row.iloc[0].get("expires_on", "")) if not row.empty else None
+    except Exception:
+        expires = None
+    return camp_config.cert_status(expires, datetime.now(TZ).date(), CFG.driver_cert_warn_days), expires
+
+
+def render_driver_certifications():
+    """Admin: the digital replacement for the paper certification clipboard in each van."""
+    section_title("Driver Certifications")
+    st.caption(
+        "Everyone cleared to drive, with the dates on file. An expired driver is blocked at van checkout. "
+        "Edit the dates in the drivers tab of your Google Sheet (certified_on and expires_on)."
+    )
+    table = driver_cert_table()
+    if table.empty:
+        st.info("No cleared drivers yet. Mark drivers with passed_test = TRUE in the drivers tab.")
+        return
+    bad = table["Status"].isin(["EXPIRED", "Expiring soon"]).sum()
+    if bad:
+        st.warning(f"{bad} driver(s) need attention. They are listed first.")
+    st.dataframe(table, use_container_width=True, hide_index=True)
+    st.download_button(
+        "Download as CSV (to print or keep)",
+        table.to_csv(index=False).encode("utf-8"),
+        file_name=f"{CFG.csv_prefix}_driver_certifications_{datetime.now(TZ).strftime('%Y-%m-%d')}.csv",
+        mime="text/csv",
+        key="driver_cert_csv",
+    )
+    st.markdown("---")
+
+
+def downtime_sheet_html() -> str:
+    """A printable paper log for when the internet is down: every active staff
+    member, with blanks to write the reason and times. Entered into the app after."""
+    try:
+        names = sorted(load_staff_df_cached().query("active")["name"].astype(str))
+    except Exception:
+        names = []
+    today = datetime.now(TZ).strftime("%A, %B %d, %Y").replace(" 0", " ")
+    body = "".join(
+        f"<tr><td>{esc(n)}</td><td></td><td></td><td></td><td></td></tr>" for n in names
+    )
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'><title>Downtime sheet</title><style>"
+        "body{font-family:Arial,sans-serif;margin:24px;color:#111}h1{font-size:20px;margin:0}"
+        "p{margin:4px 0 12px;font-size:13px}table{border-collapse:collapse;width:100%;font-size:13px}"
+        "th,td{border:1px solid #444;padding:7px 6px;text-align:left}th{background:#eee}"
+        "td:first-child{width:24%;font-weight:600}tr{height:30px}@media print{tr{page-break-inside:avoid}}"
+        f"</style></head><body><h1>{esc(CAMP_NAME)}: paper sign-out sheet</h1>"
+        f"<p>Use this only while the app is down. Date: {esc(today)}. "
+        "Write every sign-out and sign-in here, then enter them into the app (or ask the office) once it is back.</p>"
+        "<table><tr><th>Name</th><th>Reason</th><th>Time out</th><th>Time back</th><th>Initials</th></tr>"
+        f"{body}</table></body></html>"
+    )
+
+
+def render_downtime_sheet():
+    section_title("Paper Sheet for Downtime")
+    st.caption(
+        "If the internet is down, print this and have staff write their sign-outs and sign-ins on it. "
+        "It lists every active staff member. Keep a printed copy at the kiosk."
+    )
+    st.download_button(
+        "Download the printable sheet",
+        downtime_sheet_html().encode("utf-8"),
+        file_name=f"{CFG.csv_prefix}_downtime_sheet.html",
+        mime="text/html",
+        key="downtime_sheet_dl",
+    )
+    st.markdown("---")
 
 
 # Columns the app itself owns. Everything else in the staff tab (phone, email,
@@ -4372,6 +4495,10 @@ def page_admin_history(staff_pins: dict):
 
     if CFG.staff_directory:
         render_staff_directory()
+    if CFG.driver_cert_tracking:
+        render_driver_certifications()
+    if CFG.downtime_sheet:
+        render_downtime_sheet()
 
     # -------------------------------------------------
     # PIN SECURITY: one-way migration from plaintext to hashed PINs

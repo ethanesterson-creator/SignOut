@@ -154,6 +154,20 @@ def test_minutes_until_due_window():
     assert cc.minutes_until_due(naive_due, now, 15) is None  # naive/aware mix: say nothing
 
 
+def test_cert_status_boundaries():
+    from datetime import date
+    today = date(2026, 7, 1)
+    assert cc.cert_status(None, today) == cc.CERT_MISSING
+    assert cc.cert_status(date(2026, 6, 30), today) == cc.CERT_EXPIRED       # yesterday: expired
+    assert cc.cert_status(date(2026, 7, 1), today) == cc.CERT_EXPIRING       # good through today itself
+    assert cc.cert_status(date(2026, 7, 31), today, 30) == cc.CERT_EXPIRING  # exactly 30 days out
+    assert cc.cert_status(date(2026, 8, 1), today, 30) == cc.CERT_VALID      # 31 days out
+    d = cc.load({})
+    assert d.driver_cert_tracking is False and d.downtime_sheet is False and d.driver_cert_warn_days == 30
+    on = cc.load({"driver_cert_tracking": True, "downtime_sheet": True, "driver_cert_warn_days": 45})
+    assert on.driver_cert_tracking and on.downtime_sheet and on.driver_cert_warn_days == 45
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

@@ -93,6 +93,22 @@ def read_staff(path: str) -> list:
     return rows
 
 
+# Optional staff columns that ride along into the camp's Sheet when the CSV has them.
+STAFF_EXTRA_COLUMNS = ("phone", "email")
+DRIVER_EXTRA_COLUMNS = ("certified_on", "expires_on")
+
+
+def read_staff_extras(path: str) -> dict:
+    """{name: {column: value}} for the optional columns (phone, email, certified_on, expires_on)."""
+    out = {}
+    with Path(path).open(newline="", encoding="utf-8-sig") as f:
+        for r in csv.DictReader(f):
+            r = {k.strip().lower(): (v or "").strip() for k, v in r.items() if k}
+            if r.get("name"):
+                out[r["name"]] = {k: r.get(k, "") for k in STAFF_EXTRA_COLUMNS + DRIVER_EXTRA_COLUMNS if r.get(k, "")}
+    return out
+
+
 # ---------------------------------------------------------------------------
 # TOML writing (the standard library only reads TOML)
 # ---------------------------------------------------------------------------
@@ -137,7 +153,8 @@ def build_settings(intake: dict, sheet_id: str) -> dict:
     for k in ("forgot_threshold_minutes", "fork_no_deadline_hours", "nightly_summary_hour",
               "auto_archive_hour", "archive_keep_days",
               "due_soon_minutes", "board_reason_filter", "staff_directory",
-              "alert_email_to", "alert_email_from", "late_alerts_only"):
+              "alert_email_to", "alert_email_from", "late_alerts_only",
+              "driver_cert_tracking", "driver_cert_warn_days", "downtime_sheet"):
         if k in intake:
             s[k] = intake[k]
     return s
@@ -172,7 +189,7 @@ def render_secrets(settings: dict, extras: dict, service_account: dict) -> str:
 
 def director_email(intake: dict, sa_email: str) -> str:
     sa = sa_email or "<<< service account email: create the key first, then re-run this script >>>"
-    return f"""Subject: Setting up SignOut for {intake['camp_name']}: one 5-minute step
+    return f"""Subject: Setting up Headcount for {intake['camp_name']}: one 5-minute step
 
 Hi {intake.get('director_name', 'there')},
 
@@ -181,7 +198,7 @@ from you. Your staff data will live in a Google Sheet that you own, so it
 stays yours at all times.
 
 1. While signed in to the Google account the camp will use, create a new, blank
-   Google Sheet. Name it anything, for example "{intake['camp_name']} SignOut".
+   Google Sheet. Name it anything, for example "{intake['camp_name']} Headcount".
 2. Click Share, paste this address, set it to Editor, and uncheck "Notify people":
        {sa}
 3. Copy the Sheet's web address from your browser and reply with it.
@@ -305,6 +322,7 @@ def provision(intake_path: str, out_root: str = "camps", rng=None, ops_path=None
 
     staff_csv = str(intake.get("staff_csv", "")).strip()
     staff = read_staff(staff_csv) if staff_csv else []
+    extras_by_name = read_staff_extras(staff_csv) if staff_csv else {}
 
     (out / "director_email.txt").write_text(director_email(intake, sa_email), encoding="utf-8")
     written.append("director_email.txt")
@@ -313,17 +331,19 @@ def provision(intake_path: str, out_root: str = "camps", rng=None, ops_path=None
         pins = make_pins(len(staff), rng)
         with (out / "staff_import.csv").open("w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
-            w.writerow(["name", "pin", "active", "admin"])
+            staff_extra = [c for c in STAFF_EXTRA_COLUMNS if any(e.get(c) for e in extras_by_name.values())]
+            w.writerow(["name", "pin", "active", "admin"] + staff_extra)
             for (name, admin, _drv), pin in zip(staff, pins):
-                w.writerow([name, pin, "TRUE", "TRUE" if admin else ""])
+                w.writerow([name, pin, "TRUE", "TRUE" if admin else ""] + [extras_by_name.get(name, {}).get(c, "") for c in staff_extra])
         written.append("staff_import.csv")
         drivers = [n for n, _, d in staff if d]
         if drivers:
             with (out / "drivers_import.csv").open("w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
-                w.writerow(["name", "passed_test"])
+                drv_extra = [c for c in DRIVER_EXTRA_COLUMNS if any(extras_by_name.get(n, {}).get(c) for n in drivers)]
+                w.writerow(["name", "passed_test"] + drv_extra)
                 for n in drivers:
-                    w.writerow([n, "TRUE"])
+                    w.writerow([n, "TRUE"] + [extras_by_name.get(n, {}).get(c, "") for c in drv_extra])
             written.append("drivers_import.csv")
 
     if sa and sheet_id:

@@ -145,6 +145,33 @@ def test_operator_alert_channel_is_added_when_configured():
         assert "ops_ntfy_topic" not in sec2   # no ops file: no ops alerts, nothing breaks
 
 
+def test_phone_email_and_cert_dates_ride_into_the_import_files():
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        intake = _setup(tmp, with_staff=False)
+        (tmp / "staff2.csv").write_text(
+            "name,admin,driver,phone,email,expires_on,certified_on\n"
+            "Alex Rivera,TRUE,TRUE,413-555-0101,alex@example.com,2026-12-31,2026-05-01\n"
+            "Sam Lee,,,413-555-0102,,,\n", encoding="utf-8")
+        text = Path(intake).read_text(encoding="utf-8").replace('staff_csv = ""', f'staff_csv = "{(tmp / "staff2.csv").as_posix()}"')
+        Path(intake).write_text(text, encoding="utf-8")
+        res = new_camp.provision(intake, str(tmp / "camps"))
+        out = Path(res["dir"])
+        staff = list(csv.DictReader((out / "staff_import.csv").open(encoding="utf-8")))
+        assert list(staff[0].keys()) == ["name", "pin", "active", "admin", "phone", "email"]
+        assert staff[0]["phone"] == "413-555-0101" and staff[1]["email"] == ""
+        drivers = list(csv.DictReader((out / "drivers_import.csv").open(encoding="utf-8")))
+        assert drivers == [{"name": "Alex Rivera", "passed_test": "TRUE", "certified_on": "2026-05-01", "expires_on": "2026-12-31"}]
+
+
+def test_director_email_uses_the_headcount_name():
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        res = new_camp.provision(_setup(tmp), str(tmp / "camps"))
+        text = (Path(res["dir"]) / "director_email.txt").read_text(encoding="utf-8")
+        assert "Headcount" in text and "SignOut" not in text
+
+
 if __name__ == "__main__":
     for k, v in sorted(globals().items()):
         if k.startswith("test_"):

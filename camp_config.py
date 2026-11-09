@@ -110,6 +110,11 @@ class CampConfig:
     board_reason_filter: bool = False     # True: Who's Out gets a filter by reason (for example Night Off)
     staff_directory: bool = False         # True: Admin gets a staff search with phone, email and other info
 
+    # drivers and downtime
+    driver_cert_tracking: bool = False    # True: drivers carry certified_on / expires_on; expired drivers cannot take a van
+    driver_cert_warn_days: int = 30       # flag a certification this many days before it expires
+    downtime_sheet: bool = False          # True: Admin can download a printable paper sheet for when the internet is down
+
     # alert emails (sent through Resend; the API key lives in secrets as resend_api_key, never here)
     alert_email_to: tuple = ()            # who gets the late and "late person is back" emails; empty = no email
     alert_email_from: str = ""            # e.g. "Headcount <alerts@headcountcamp.com>"
@@ -285,6 +290,9 @@ def load(secrets) -> CampConfig:
         due_soon_minutes=_as_int(secrets, "due_soon_minutes", d.due_soon_minutes, 0, 120),
         board_reason_filter=_as_bool(secrets, "board_reason_filter", d.board_reason_filter),
         staff_directory=_as_bool(secrets, "staff_directory", d.staff_directory),
+        driver_cert_tracking=_as_bool(secrets, "driver_cert_tracking", d.driver_cert_tracking),
+        driver_cert_warn_days=_as_int(secrets, "driver_cert_warn_days", d.driver_cert_warn_days, 1, 365),
+        downtime_sheet=_as_bool(secrets, "downtime_sheet", d.downtime_sheet),
         alert_email_to=_as_email_list(secrets, "alert_email_to"),
         alert_email_from=str(_get(secrets, "alert_email_from", d.alert_email_from)).strip(),
         late_alerts_only=_as_bool(secrets, "late_alerts_only", d.late_alerts_only),
@@ -363,3 +371,24 @@ def minutes_until_due(due, now, window: int):
         return None
     mins = int(-(-remaining // 60))  # ceiling
     return mins if mins <= window else None
+
+
+CERT_VALID, CERT_EXPIRING, CERT_EXPIRED, CERT_MISSING = "valid", "expiring", "expired", "missing"
+
+
+def cert_status(expires, today, warn_days: int = 30) -> str:
+    """Where a driver's certification stands on `today` (both are dates).
+
+    expired:  the expiry date is before today (it is good through the expiry date itself)
+    expiring: good now, but ends within warn_days
+    missing:  no expiry date on file
+    """
+    from datetime import timedelta
+
+    if expires is None:
+        return CERT_MISSING
+    if expires < today:
+        return CERT_EXPIRED
+    if expires <= today + timedelta(days=warn_days):
+        return CERT_EXPIRING
+    return CERT_VALID
