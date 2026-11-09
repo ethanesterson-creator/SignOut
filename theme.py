@@ -71,6 +71,10 @@ section[data-testid="stSidebar"] label[data-testid="stRadioOption"][data-selecte
     background: radial-gradient(520px 260px at 0% 0%, rgba(@RGB@,0.75), transparent 66%), linear-gradient(135deg, rgba(@RGB@,0.42), #1F3352 80%);
 }
 .sg-row:not(.sg-late):not(.sg-soon):not(.sg-forgot) { border-left: 4px solid rgba(@RGB@,0.8); }
+/* selected names in a multi-select (the group sign-out picker): the base rules target an old
+   component, so name the current one and give it a colour with readable text */
+[data-testid="stMultiSelect"] span[data-tag] { background: var(--navy-3) !important; border: 1px solid rgba(@RGB@,0.75); border-radius: 8px; }
+[data-testid="stMultiSelect"] span[data-tag], [data-testid="stMultiSelect"] span[data-tag] * { color: #fff !important; }
 """
     for k, v in t.items():
         css = css.replace(k, v)
