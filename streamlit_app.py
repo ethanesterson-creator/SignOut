@@ -1469,12 +1469,12 @@ def append_log_row(name: str, reason: str, other_reason: str, action: str, statu
         else:
             notify_phone(f"{CAMP_NOTIFY_PREFIX}: Signed IN", name)
 
-    # A late person coming back is worth its own message, because the earlier
-    # late alert said "you will hear when they are back". Only real lateness
-    # counts: the auto-close note for a forgotten sign-in is not a late return.
+    # A late person coming back gets its own email, because the earlier late email
+    # said "you will hear when they are back". Only real lateness counts: the
+    # auto-close note for a forgotten sign-in is not a late return.
     if action == "IN" and str(late or "").startswith("LATE"):
-        if CFG.late_alerts_only:  # otherwise the ordinary "Signed IN" push above already covered it
-            notify_phone(f"{CAMP_NOTIFY_PREFIX}: Back in", f"{name} is back ({late})")
+        # The phone already gets "Signed IN (LATE)" from the sign-in page itself, so only
+        # the email is new here.
         try:
             subject, body = emailalert.back_in_message(CAMP_NAME, name, late)
             send_alert_email(subject, body)
