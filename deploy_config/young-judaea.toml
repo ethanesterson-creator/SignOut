@@ -22,6 +22,7 @@ brand_accent = "#3EA5D8"
 compact_admin = true
 quiet_code_boxes = true
 server_late_check = true
+one_van_per_driver = true
 
 [van_labels]
 "Minivan" = "Minivan"

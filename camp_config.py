@@ -118,6 +118,7 @@ class CampConfig:
     brand_accent: str = ""
 
     # drivers and downtime
+    one_van_per_driver: bool = False      # True: a driver who already has a van out cannot take a second one
     driver_cert_tracking: bool = False    # True: drivers carry certified_on / expires_on; expired drivers cannot take a van
     driver_cert_warn_days: int = 30       # flag a certification this many days before it expires
     downtime_sheet: bool = False          # True: Admin can download a printable paper sheet for when the internet is down
@@ -311,6 +312,7 @@ def load(secrets) -> CampConfig:
         compact_admin=_as_bool(secrets, "compact_admin", d.compact_admin),
         quiet_code_boxes=_as_bool(secrets, "quiet_code_boxes", d.quiet_code_boxes),
         brand_accent=_as_hex(secrets, "brand_accent", d.brand_accent),
+        one_van_per_driver=_as_bool(secrets, "one_van_per_driver", d.one_van_per_driver),
         driver_cert_tracking=_as_bool(secrets, "driver_cert_tracking", d.driver_cert_tracking),
         driver_cert_warn_days=_as_int(secrets, "driver_cert_warn_days", d.driver_cert_warn_days, 1, 365),
         downtime_sheet=_as_bool(secrets, "downtime_sheet", d.downtime_sheet),
@@ -414,3 +416,20 @@ def cert_status(expires, today, warn_days: int = 30) -> str:
     if expires <= today + timedelta(days=warn_days):
         return CERT_EXPIRING
     return CERT_VALID
+
+
+def other_van_out(status_map: dict, driver: str, this_van: str):
+    """The name of another van this driver already has out, or None.
+
+    status_map is the app's van status: {van: {"status": "IN"/"OUT", "driver": name, ...}}.
+    A van is never in conflict with itself, and a returned van does not count.
+    """
+    who = str(driver or "").strip()
+    if not who:
+        return None
+    for van, info in status_map.items():
+        if van == this_van:
+            continue
+        if str(info.get("status", "")).upper() == "OUT" and str(info.get("driver", "")).strip() == who:
+            return van
+    return None

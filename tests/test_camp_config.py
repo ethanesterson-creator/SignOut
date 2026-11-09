@@ -199,6 +199,19 @@ def test_interface_tidying_flags():
     assert cc.load({}).server_late_check is False and cc.load({"server_late_check": True}).server_late_check is True
 
 
+def test_one_van_per_driver():
+    status = {"Van 1": {"status": "OUT", "driver": "Gray Haas"}, "Minivan": {"status": "IN", "driver": "Gray Haas"},
+              "Van 2": {"status": "OUT", "driver": "Lane Mayer"}}
+    assert cc.other_van_out(status, "Gray Haas", "Minivan") == "Van 1"      # already driving Van 1
+    assert cc.other_van_out(status, "Gray Haas", "Van 1") is None           # a van never conflicts with itself
+    assert cc.other_van_out(status, "Quinn Nash", "Minivan") is None        # a free driver is fine
+    assert cc.other_van_out(status, "Lane Mayer", "Van 1") == "Van 2"
+    status["Van 1"]["status"] = "IN"
+    assert cc.other_van_out(status, "Gray Haas", "Minivan") is None          # returned van no longer counts
+    assert cc.other_van_out(status, "", "Van 1") is None
+    assert cc.load({}).one_van_per_driver is False and cc.load({"one_van_per_driver": True}).one_van_per_driver is True
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

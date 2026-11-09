@@ -3804,6 +3804,12 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                     st.error(f"{van_label(selected)} was taken a moment ago. Pick another van.")
                     return
 
+                if CFG.one_van_per_driver:
+                    busy = camp_config.other_van_out(compute_van_status(load_vans_df_cached()), driver, selected)
+                    if busy:
+                        st.error(f"{driver} already has {van_label(busy)} out. Bring it back before taking another van.")
+                        return
+
                 if purpose == "Other" and not other_purpose.strip():
                     st.error("Please enter the other purpose.")
                     return
