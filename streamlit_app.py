@@ -1289,7 +1289,7 @@ def load_logs_df_cached():
         if c not in df.columns:
             df[c] = ""
 
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df["timestamp"] = _parse_ts(df["timestamp"])
     df["name"] = df["name"].astype(str).str.strip()
     df["status"] = df["status"].astype(str).str.strip().str.upper()
     df["action"] = df["action"].astype(str).str.strip().str.upper()
@@ -1638,6 +1638,16 @@ def delete_logs_by_ids(ids_to_delete):
 # =================================================
 # LOGIC HELPERS
 # =================================================
+def _parse_ts(series, **kw):
+    """Parse a timestamp column. Rows written before and after a daylight-saving
+    change carry different UTC offsets (-04:00 vs -05:00); pandas refuses to mix
+    them. Fall back to converting everything to UTC, then to camp-local time."""
+    try:
+        return pd.to_datetime(series, errors="coerce", **kw)
+    except (ValueError, TypeError):
+        return pd.to_datetime(series, errors="coerce", utc=True, **kw).dt.tz_convert(TZ)
+
+
 def _sorted_by_recency(df: pd.DataFrame) -> pd.DataFrame:
     """Sort log rows oldest -> newest, reliably.
 
@@ -1653,7 +1663,7 @@ def _sorted_by_recency(df: pd.DataFrame) -> pd.DataFrame:
     """
     tmp = df.copy().reset_index(drop=True)
     tmp["_row"] = range(len(tmp))
-    tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce", format="mixed")
+    tmp["timestamp"] = _parse_ts(tmp["timestamp"], format="mixed")
     tmp = tmp.sort_values(
         ["timestamp", "_row"],
         na_position="first",
@@ -2081,7 +2091,7 @@ def build_full_history_csv() -> str:
     if "id" in full.columns:
         full = full.drop_duplicates(subset=["id"], keep="first")
     if "timestamp" in full.columns:
-        full["_ts"] = pd.to_datetime(full["timestamp"], errors="coerce")
+        full["_ts"] = _parse_ts(full["timestamp"])
         full = full.sort_values("_ts", na_position="first").drop(columns=["_ts"])
     return full.to_csv(index=False)
 
@@ -2105,7 +2115,7 @@ def build_full_van_history_csv() -> str:
     if "id" in full.columns:
         full = full.drop_duplicates(subset=["id"], keep="first")
     if "timestamp" in full.columns:
-        full["_ts"] = pd.to_datetime(full["timestamp"], errors="coerce")
+        full["_ts"] = _parse_ts(full["timestamp"])
         full = full.sort_values("_ts", na_position="first").drop(columns=["_ts"])
     return full.to_csv(index=False)
 
@@ -4246,7 +4256,7 @@ def page_admin_history(staff_pins: dict):
         st.caption("No audit events recorded yet. Every emergency, archive, deletion, and PIN migration shows up here.")
     else:
         df_audit_view = df_audit.tail(50).iloc[::-1].copy()
-        df_audit_view["timestamp"] = pd.to_datetime(df_audit_view["timestamp"], errors="coerce").apply(format_time)
+        df_audit_view["timestamp"] = _parse_ts(df_audit_view["timestamp"]).apply(format_time)
         df_audit_view = df_audit_view.rename(columns={
             "timestamp": "When", "admin": "Who", "action": "Action", "detail": "Detail",
         })
@@ -4383,7 +4393,7 @@ def page_admin_history(staff_pins: dict):
 
         total_rows = len(df_scope)
         df_display = df_scope.copy()
-        df_display["_ts"] = pd.to_datetime(df_display["timestamp"], errors="coerce", format="mixed")
+        df_display["_ts"] = _parse_ts(df_display["timestamp"], format="mixed")
         df_display = df_display.sort_values("_ts", na_position="first").drop(columns=["_ts"])
         scope_bits = [b for b in (name_filter, reason_filter) if b != "All"]
         scope_desc = " + ".join(scope_bits)
@@ -4435,7 +4445,7 @@ def page_admin_history(staff_pins: dict):
         total_van_rows = len(dfv)
         dfv = dfv.copy()
         if "timestamp" in dfv.columns:
-            dfv["timestamp"] = pd.to_datetime(dfv["timestamp"], errors="coerce")
+            dfv["timestamp"] = _parse_ts(dfv["timestamp"])
             dfv = dfv.sort_values("timestamp", na_position="first")
             dfv["timestamp_str"] = dfv["timestamp"].apply(format_time)
         else:
@@ -4663,7 +4673,7 @@ def _ops_digest_text() -> str:
     yday = (datetime.now(TZ) - timedelta(days=1)).date()
     outs = ins = late = 0
     if not df.empty and "timestamp" in df.columns:
-        ts = pd.to_datetime(df["timestamp"], errors="coerce")
+        ts = _parse_ts(df["timestamp"])
         day = df[ts.dt.date == yday]
         action = day.get("action", pd.Series(dtype=str)).astype(str).str.upper()
         outs = int((action == "OUT").sum())
