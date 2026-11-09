@@ -15,6 +15,16 @@ else
     exit 1
 fi
 
+# If this service names its camp (CAMP_SLUG), that camp's committed settings are merged
+# into the secrets, so changing a setting is a normal push instead of re-pasting secrets.
+if [ -n "$CAMP_SLUG" ]; then
+    if [ ! -f "deploy_config/$CAMP_SLUG.toml" ]; then
+        echo "CAMP_SLUG is '$CAMP_SLUG' but deploy_config/$CAMP_SLUG.toml does not exist." >&2
+        exit 1
+    fi
+    python provision/merge_settings.py merge .streamlit/secrets.toml "deploy_config/$CAMP_SLUG.toml"
+fi
+
 # The late-alert worker runs beside the app as its own process, so a late person is
 # noticed even if no screen is on a board. It exits with code 3 if the camp has not
 # turned it on; any other exit (a crash) is restarted after a few seconds.
@@ -25,6 +35,7 @@ fi
         sleep 5
     done
 ) &
+
 
 exec streamlit run streamlit_app.py \
     --server.port "${PORT:-10000}" \

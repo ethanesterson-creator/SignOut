@@ -38,3 +38,22 @@ Open the `https://<name>.onrender.com` address when the deploy finishes.
 Same steps with the camp's own `secrets.toml` from `provision/new_camp.py`.
 Updates: Bauercrest's service follows `main`; every other camp follows a `stable`
 branch that is moved forward only after Bauercrest has run the change cleanly.
+
+## Settings in the repo, secrets in Render (optional, recommended)
+
+By default the whole `secrets.toml` lives in Render, so every setting change means
+re-pasting it. Instead, keep the camp's settings in `deploy_config/<slug>.toml`
+(committed, no secrets) and only the private keys in Render:
+
+1. Split an existing full file once:
+   `python provision/merge_settings.py split camps/<camp>/secrets.toml deploy_config/<slug>.toml camps/<camp>/secrets.private.toml`
+2. Commit `deploy_config/<slug>.toml`.
+3. In Render, add the environment variable `CAMP_SLUG` = `<slug>`, and paste the contents of
+   `secrets.private.toml` over the secret file.
+
+At startup `start.sh` merges the two. After that, changing a setting (a switch, a reason,
+the schedule, who gets alert emails) is an ordinary commit and push; Render redeploys by itself.
+The committed file can never hold a private key: the merge refuses admin_password, pin_salt,
+the ntfy topics, resend_api_key, spreadsheet_id and the Google key.
+If a setting appears in both places, the committed file wins, so moving over is safe to do in
+any order. Camps without `CAMP_SLUG` behave exactly as before.

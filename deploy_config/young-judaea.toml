@@ -1,0 +1,51 @@
+# This camp's settings. Committed to the repo. No secrets here.
+
+camp_name = "Camp Young Judaea"
+camp_tagline = "Amherst, NH"
+camp_logo_path = "logo-yj.png"
+camp_notify_prefix = "Young Judaea"
+camp_csv_prefix = "young-judaea"
+camp_board_label = "Camp Young Judaea"
+camp_timezone = "US/Eastern"
+vans = ["Minivan", "Van 1", "Van 2"]
+default_schedule = [["Period 1", "09:00", "09:50"], ["Period 2", "10:00", "10:50"], ["Period 3", "11:00", "11:50"], ["Rest Period", "13:00", "14:00"], ["Period 4", "14:10", "15:00"], ["Period 5", "15:10", "16:00"]]
+due_soon_minutes = 15
+board_reason_filter = true
+staff_directory = true
+alert_email_to = ["ethan.esterson@gmail.com"]
+alert_email_from = "Headcount <alerts@headcountcamp.com>"
+late_alerts_only = true
+driver_cert_tracking = true
+driver_cert_warn_days = 30
+downtime_sheet = true
+brand_accent = "#3EA5D8"
+compact_admin = true
+quiet_code_boxes = true
+server_late_check = true
+
+[van_labels]
+"Minivan" = "Minivan"
+"Van 1" = "Van 1"
+"Van 2" = "Van 2"
+
+[[reasons]]
+name = "Period Off"
+rule = "period_end"
+grace_min = 5
+
+[[reasons]]
+name = "Night Off"
+rule = "next_clock"
+hour = 0
+minute = 15
+
+[[reasons]]
+name = "Day Off"
+rule = "day_after"
+hour = 7
+minute = 45
+nextday_cutoff_hour = 12
+
+[[reasons]]
+name = "Other (type reason)"
+rule = "none"
