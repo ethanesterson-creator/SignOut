@@ -954,6 +954,27 @@ def is_surprising_signin(info: dict, when=None) -> bool:
 
 
 _late_check_lock = threading.Lock()
+WORKER_STALE_SECONDS = 300
+
+
+def late_worker_age_seconds():
+    """Seconds since late_worker.py last checked in (its heartbeat in the settings tab),
+    or None if it never has."""
+    raw = get_setting("late_worker_ok")
+    if not raw:
+        return None
+    try:
+        beat = datetime.fromisoformat(raw)
+        if beat.tzinfo is None:
+            beat = TZ.localize(beat)
+        return max(0.0, (datetime.now(TZ) - beat).total_seconds())
+    except Exception:
+        return None
+
+
+def late_worker_alive() -> bool:
+    age = late_worker_age_seconds()
+    return age is not None and age < WORKER_STALE_SECONDS
 
 
 def check_late_and_alert(df_out: pd.DataFrame):
@@ -964,6 +985,8 @@ def check_late_and_alert(df_out: pd.DataFrame):
     twice for the same sign-out. Wrapped so a failure never breaks the board.
     """
     try:
+        if CFG.server_late_check and late_worker_alive():
+            return  # late_worker.py is running and sends these. If it ever stops, the boards take over.
         if df_out is None or df_out.empty:
             return
         with _late_check_lock:
@@ -4131,6 +4154,20 @@ def render_staff_directory():
     )
 
 
+def render_late_alert_status():
+    """One line so the office can see that late alerts are being watched."""
+    try:
+        age = late_worker_age_seconds()
+    except Exception:
+        return
+    if age is not None and age < WORKER_STALE_SECONDS:
+        st.caption(f"Late alerts are on. Last check {max(1, int(age // 60))} min ago." if age >= 60 else "Late alerts are on. Checked just now.")
+    elif age is None:
+        st.caption("Late alerts: waiting for the first check. The open boards are covering until then.")
+    else:
+        st.warning(f"The late-alert watcher has not checked in for {int(age // 60)} minutes. The open boards are covering, but tell your Headcount contact.")
+
+
 def page_admin_history(staff_pins: dict):
     page_title("Office Use Only", "Admin / History")
     ADMIN_PASSWORD = st.secrets.get("admin_password", "")
@@ -4167,6 +4204,12 @@ def page_admin_history(staff_pins: dict):
 
     ADMIN_GROUPS = ["Today", "People", "History", "Setup"]
     admin_tabs = dict(zip(ADMIN_GROUPS, st.tabs(ADMIN_GROUPS))) if CFG.compact_admin else {}
+    if CFG.server_late_check:
+        if CFG.compact_admin:
+            with admin_tabs["Today"]:
+                render_late_alert_status()
+        else:
+            render_late_alert_status()
 
     @contextlib.contextmanager
     def admin_section(title, group, open_=False, divider=True, plain_expander=False):
@@ -4935,8 +4978,6 @@ def _main_body():
     livecache.prewarm()  # first load of every sheet at once, not one by one
     if livecache.once("opswatch"):
         start_ops_watch()
-    if livecache.once("late_watch"):
-        start_late_watch()
 
     logo_path = Path(CAMP_LOGO_PATH)
     if logo_path.exists():
@@ -5062,28 +5103,6 @@ def _ops_digest_text() -> str:
         f"Alive. Yesterday: {outs} sign-outs, {ins} sign-ins, {late} late. "
         f"Since last restart: {stats['done']} saves to Sheets, {stats['failed_attempts']} retries."
     )
-
-
-LATE_WATCH_SECONDS = 30
-
-
-def _late_watch_loop():
-    """Runs for the life of the server. Looks at who is out and fires late alerts,
-    whether or not any browser has a board open. The kiosk is often parked on the
-    Sign In page, which does no checking of its own."""
-    while True:
-        time.sleep(LATE_WATCH_SECONDS)
-        try:
-            check_late_and_alert(get_currently_out(load_current_status_df_cached()))
-        except Exception:
-            pass
-
-
-def start_late_watch():
-    """Start the server-side late check, for camps that turned it on."""
-    if not CFG.server_late_check:
-        return
-    threading.Thread(target=_late_watch_loop, daemon=True, name="late-watch").start()
 
 
 def start_ops_watch():

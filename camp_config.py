@@ -125,7 +125,7 @@ class CampConfig:
     # alert emails (sent through Resend; the API key lives in secrets as resend_api_key, never here)
     alert_email_to: tuple = ()            # who gets the late and "late person is back" emails; empty = no email
     alert_email_from: str = ""            # e.g. "Headcount <alerts@headcountcamp.com>"
-    server_late_check: bool = False       # True: the server itself checks for late people every 30 seconds, with no screen needed
+    server_late_check: bool = False       # True: a separate worker (late_worker.py) sends late alerts every 30 seconds, with no screen needed
     late_alerts_only: bool = False        # True: skip routine sign-out/in, van and nightly pushes. Late, back-in and emergency stay.
 
     # operator alerts (see opswatch.py): a private ntfy topic that only the person

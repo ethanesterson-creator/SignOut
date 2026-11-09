@@ -15,6 +15,17 @@ else
     exit 1
 fi
 
+# The late-alert worker runs beside the app as its own process, so a late person is
+# noticed even if no screen is on a board. It exits with code 3 if the camp has not
+# turned it on; any other exit (a crash) is restarted after a few seconds.
+(
+    while true; do
+        python late_worker.py
+        [ $? -eq 3 ] && break
+        sleep 5
+    done
+) &
+
 exec streamlit run streamlit_app.py \
     --server.port "${PORT:-10000}" \
     --server.address 0.0.0.0 \
