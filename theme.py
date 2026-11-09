@@ -33,13 +33,52 @@ def set_accent(accent: str = ""):
     SKY = accent if accent else SKY_DEFAULT
 
 
-def branded_css(accent: str = "") -> str:
-    """APP_CSS with the camp's accent in place of the default sky blue.
+def _overlay(accent: str) -> str:
+    """The extra rules that make a camp's accent a visible part of the look: a brand
+    bar across the top, the accent on the active page, the main buttons, the page
+    title rule and the 'signing out' banner. Navy stays the atmosphere; red and gold
+    stay reserved for status."""
+    a = _rgb(accent)
+    light = _mix(a, (255, 255, 255), 0.25)
+    ink = _mix(a, (4, 14, 30), 0.80)           # dark text that sits on the accent
+    navy2 = _mix((31, 51, 82), a, 0.16)
+    navy3 = _mix((31, 51, 82), a, 0.42)
+    t = {
+        "@RGB@": "%d,%d,%d" % a, "@HEX@": accent, "@LIGHT@": "#%02X%02X%02X" % light,
+        "@INK@": "#%02X%02X%02X" % ink, "@N2@": "#%02X%02X%02X" % navy2, "@N3@": "#%02X%02X%02X" % navy3,
+    }
+    css = """
+/* ===== camp accent ===== */
+:root { --accent: @HEX@; --accent-2: @LIGHT@; --accent-ink: @INK@; --navy-2: @N2@; --navy-3: @N3@; }
+header[data-testid="stHeader"]::before {
+    content: ""; position: absolute; left: 0; right: 0; top: 0; height: 6px; z-index: 5;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2) 55%, var(--accent));
+}
+.sg-head { border-bottom: 3px solid var(--accent); }
+.sg-head-r { color: var(--accent-2); }
+section[data-testid="stSidebar"] { border-right: 2px solid rgba(@RGB@,0.55); }
+section[data-testid="stSidebar"] label[data-testid="stRadioOption"][data-selected="true"] {
+    background: linear-gradient(90deg, rgba(@RGB@,0.42), rgba(@RGB@,0.10));
+    border-color: rgba(@RGB@,0.65);
+    box-shadow: inset 4px 0 0 var(--accent), 0 10px 30px -10px rgba(0,0,0,0.6);
+}
+section[data-testid="stSidebar"] label[data-testid="stRadioOption"][data-selected="true"]::before {
+    background: var(--accent); box-shadow: 0 0 14px 3px rgba(@RGB@,0.85);
+}
+.stButton > button, .stFormSubmitButton > button { background: var(--accent); color: var(--accent-ink); }
+.stApp .stButton > button p, .stApp .stFormSubmitButton > button p { color: var(--accent-ink); }
+.sg-banner-out, .sg-flash-out {
+    background: radial-gradient(520px 260px at 0% 0%, rgba(@RGB@,0.75), transparent 66%), linear-gradient(135deg, rgba(@RGB@,0.42), #1F3352 80%);
+}
+.sg-row:not(.sg-late):not(.sg-soon):not(.sg-forgot) { border-left: 4px solid rgba(@RGB@,0.8); }
+"""
+    for k, v in t.items():
+        css = css.replace(k, v)
+    return css
 
-    Only the blue glows and highlights change. Navy stays the atmosphere, and red
-    and gold stay reserved for late and no-sign-in, so status never depends on
-    a camp's brand. An empty accent returns the stylesheet untouched.
-    """
+
+def branded_css(accent: str = "") -> str:
+    """APP_CSS recoloured with the camp's accent (empty returns it untouched)."""
     if not accent:
         return APP_CSS
     base = _rgb(accent)
@@ -48,7 +87,10 @@ def branded_css(accent: str = "") -> str:
     css = APP_CSS
     for old, new in (("rgba(92,134,200,", base), ("rgba(120,160,230,", lighter), ("rgba(76,118,196,", darker)):
         css = css.replace(old, "rgba(%d,%d,%d," % new)
-    return css
+    css = css.replace("rgba(%d,%d,%d,0.42)" % darker, "rgba(%d,%d,%d,0.62)" % darker)   # the big corner glow
+    # The stylesheet is wrapped in <style>...</style>, so the overlay goes inside it.
+    end = css.rfind("</style>")
+    return css[:end] + _overlay(accent) + css[end:] if end != -1 else css + "<style>" + _overlay(accent) + "</style>"
 
 
 # ---------------------------------------------------------------- flags

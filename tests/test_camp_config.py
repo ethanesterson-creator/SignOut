@@ -183,7 +183,10 @@ def test_brand_accent_setting_and_css():
     assert theme.branded_css("") == theme.APP_CSS                 # default look is untouched
     css = theme.branded_css("#3EA5D8")
     assert "rgba(92,134,200," not in css and "rgba(62,165,216," in css
-    assert css.count("{") == theme.APP_CSS.count("{")             # only colours changed
+    assert css.count("{") - theme._overlay("#3EA5D8").count("{") == theme.APP_CSS.count("{")   # colours, plus the overlay
+    assert "var(--accent)" in css and "--accent: #3EA5D8" in css
+    assert css.rstrip().endswith("</style>")                      # overlay is inside the style block
+    assert ".stApp" in css and ".st62" not in css and "@RGB@" not in css   # placeholders never leak into selectors
     theme.set_accent("#3EA5D8"); assert theme.SKY == "#3EA5D8"
     theme.set_accent(""); assert theme.SKY == theme.SKY_DEFAULT
 
