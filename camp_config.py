@@ -125,6 +125,7 @@ class CampConfig:
     # alert emails (sent through Resend; the API key lives in secrets as resend_api_key, never here)
     alert_email_to: tuple = ()            # who gets the late and "late person is back" emails; empty = no email
     alert_email_from: str = ""            # e.g. "Headcount <alerts@headcountcamp.com>"
+    server_late_check: bool = False       # True: the server itself checks for late people every 30 seconds, with no screen needed
     late_alerts_only: bool = False        # True: skip routine sign-out/in, van and nightly pushes. Late, back-in and emergency stay.
 
     # operator alerts (see opswatch.py): a private ntfy topic that only the person
@@ -315,6 +316,7 @@ def load(secrets) -> CampConfig:
         downtime_sheet=_as_bool(secrets, "downtime_sheet", d.downtime_sheet),
         alert_email_to=_as_email_list(secrets, "alert_email_to"),
         alert_email_from=str(_get(secrets, "alert_email_from", d.alert_email_from)).strip(),
+        server_late_check=_as_bool(secrets, "server_late_check", d.server_late_check),
         late_alerts_only=_as_bool(secrets, "late_alerts_only", d.late_alerts_only),
         ops_topic=str(_get(secrets, "ops_ntfy_topic", d.ops_topic)).strip(),
         ops_server=str(_get(secrets, "ops_ntfy_server", d.ops_server)).strip() or d.ops_server,

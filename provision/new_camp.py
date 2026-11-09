@@ -155,7 +155,7 @@ def build_settings(intake: dict, sheet_id: str) -> dict:
               "due_soon_minutes", "board_reason_filter", "staff_directory",
               "alert_email_to", "alert_email_from", "late_alerts_only",
               "driver_cert_tracking", "driver_cert_warn_days", "downtime_sheet", "brand_accent",
-              "compact_admin", "quiet_code_boxes"):
+              "compact_admin", "quiet_code_boxes", "server_late_check"):
         if k in intake:
             s[k] = intake[k]
     return s

@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import html as html_lib
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta, time as dtime
 from pathlib import Path
@@ -952,6 +953,9 @@ def is_surprising_signin(info: dict, when=None) -> bool:
     return hours >= FORK_NO_DEADLINE_HOURS
 
 
+_late_check_lock = threading.Lock()
+
+
 def check_late_and_alert(df_out: pd.DataFrame):
     """Push once for each person who has just gone past their deadline.
 
@@ -962,6 +966,15 @@ def check_late_and_alert(df_out: pd.DataFrame):
     try:
         if df_out is None or df_out.empty:
             return
+        with _late_check_lock:
+            _check_late_and_alert_locked(df_out)
+    except Exception:
+        pass
+
+
+def _check_late_and_alert_locked(df_out: pd.DataFrame):
+    """The body of check_late_and_alert, run one caller at a time."""
+    try:
 
         # Read the dedupe list FRESH. A stale read here means two screens can
         # both decide nobody has been alerted yet and both fire.
@@ -4922,6 +4935,8 @@ def _main_body():
     livecache.prewarm()  # first load of every sheet at once, not one by one
     if livecache.once("opswatch"):
         start_ops_watch()
+    if livecache.once("late_watch"):
+        start_late_watch()
 
     logo_path = Path(CAMP_LOGO_PATH)
     if logo_path.exists():
@@ -5047,6 +5062,28 @@ def _ops_digest_text() -> str:
         f"Alive. Yesterday: {outs} sign-outs, {ins} sign-ins, {late} late. "
         f"Since last restart: {stats['done']} saves to Sheets, {stats['failed_attempts']} retries."
     )
+
+
+LATE_WATCH_SECONDS = 30
+
+
+def _late_watch_loop():
+    """Runs for the life of the server. Looks at who is out and fires late alerts,
+    whether or not any browser has a board open. The kiosk is often parked on the
+    Sign In page, which does no checking of its own."""
+    while True:
+        time.sleep(LATE_WATCH_SECONDS)
+        try:
+            check_late_and_alert(get_currently_out(load_current_status_df_cached()))
+        except Exception:
+            pass
+
+
+def start_late_watch():
+    """Start the server-side late check, for camps that turned it on."""
+    if not CFG.server_late_check:
+        return
+    threading.Thread(target=_late_watch_loop, daemon=True, name="late-watch").start()
 
 
 def start_ops_watch():

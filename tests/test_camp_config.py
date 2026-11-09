@@ -196,6 +196,7 @@ def test_interface_tidying_flags():
     assert d.compact_admin is False and d.quiet_code_boxes is False
     on = cc.load({"compact_admin": True, "quiet_code_boxes": "yes"})
     assert on.compact_admin is True and on.quiet_code_boxes is True
+    assert cc.load({}).server_late_check is False and cc.load({"server_late_check": True}).server_late_check is True
 
 
 if __name__ == "__main__":
