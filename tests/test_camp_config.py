@@ -191,6 +191,13 @@ def test_brand_accent_setting_and_css():
     theme.set_accent(""); assert theme.SKY == theme.SKY_DEFAULT
 
 
+def test_interface_tidying_flags():
+    d = cc.load({})
+    assert d.compact_admin is False and d.quiet_code_boxes is False
+    on = cc.load({"compact_admin": True, "quiet_code_boxes": "yes"})
+    assert on.compact_admin is True and on.quiet_code_boxes is True
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

@@ -110,6 +110,10 @@ class CampConfig:
     board_reason_filter: bool = False     # True: Who's Out gets a filter by reason (for example Night Off)
     staff_directory: bool = False         # True: Admin gets a staff search with phone, email and other info
 
+    # interface tidying, both off by default so existing camps look exactly as before
+    compact_admin: bool = False           # True: the Admin page is four tabs of collapsible sections instead of one long page
+    quiet_code_boxes: bool = False        # True: code boxes are masked text, so the browser never offers to save or generate a password
+
     # look: the accent colour that replaces the default sky blue (a #RRGGBB hex). Empty = the default look.
     brand_accent: str = ""
 
@@ -303,6 +307,8 @@ def load(secrets) -> CampConfig:
         due_soon_minutes=_as_int(secrets, "due_soon_minutes", d.due_soon_minutes, 0, 120),
         board_reason_filter=_as_bool(secrets, "board_reason_filter", d.board_reason_filter),
         staff_directory=_as_bool(secrets, "staff_directory", d.staff_directory),
+        compact_admin=_as_bool(secrets, "compact_admin", d.compact_admin),
+        quiet_code_boxes=_as_bool(secrets, "quiet_code_boxes", d.quiet_code_boxes),
         brand_accent=_as_hex(secrets, "brand_accent", d.brand_accent),
         driver_cert_tracking=_as_bool(secrets, "driver_cert_tracking", d.driver_cert_tracking),
         driver_cert_warn_days=_as_int(secrets, "driver_cert_warn_days", d.driver_cert_warn_days, 1, 365),

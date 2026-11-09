@@ -1,3 +1,4 @@
+import contextlib
 import hashlib
 import hmac
 import html as html_lib
@@ -164,9 +165,25 @@ import theme
 from theme import SVG_DEFS, branded_css, bunting, flag
 
 
+def code_box(label: str, **kwargs):
+    """A masked code or password box. Normally a browser password field. A camp with
+    quiet_code_boxes gets a plain text box that the stylesheet masks instead, with
+    browser autofill and history switched off, so Chrome never offers to save a code
+    or suggest a 'strong password' for it."""
+    if CFG.quiet_code_boxes:
+        return st.text_input(label, autocomplete="off", **kwargs)
+    return st.text_input(label, type="password", **kwargs)
+
+
+_CODE_BOX_LABELS = ("Your code", "Driver code", "Leader code", "Your admin code", "Enter admin password")
+
+
 def inject_css():
     theme.set_accent(CFG.brand_accent)
     st.markdown(branded_css(CFG.brand_accent) + SVG_DEFS, unsafe_allow_html=True)
+    if CFG.quiet_code_boxes:
+        sel = ", ".join(f'input[aria-label="{lbl}"]' for lbl in _CODE_BOX_LABELS)
+        st.markdown(f"<style>{sel} {{ -webkit-text-security: disc; text-security: disc; }}</style>", unsafe_allow_html=True)
 
 
 def kiosk_clock():
@@ -3333,7 +3350,7 @@ def page_sign_in_out(staff_pins: dict, staff_names: list):
         with st.form("signio_form", clear_on_submit=False):
             code_col, btn_col = st.columns([2, 1])
             with code_col:
-                st.text_input("Your code", type="password", max_chars=4, key=f"signio_code_{n}")
+                code_box("Your code", max_chars=4, key=f"signio_code_{n}")
             with btn_col:
                 st.markdown("<div style='height:1.6rem'></div>", unsafe_allow_html=True)
                 # The sign-in/out itself runs as the button's on_click, BEFORE
@@ -3613,7 +3630,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
 
         pin_lookup_in = build_pin_lookup(staff_pins)
         with st.form(f"van_back_form_{van_nonce}", clear_on_submit=True):
-            back_code = st.text_input("Your code", type="password", max_chars=4)
+            back_code = code_box("Your code", max_chars=4)
             gas_left = st.selectbox("Gas left", ["Full", "3/4", "Half", "1/4", "Low / Empty"])
             back_go = st.form_submit_button(f"Bring {van_label(selected)} Back", use_container_width=True)
 
@@ -3714,7 +3731,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
         pin_lookup = build_pin_lookup(staff_pins)
         with st.form(f"van_take_form_{van_nonce}", clear_on_submit=False):
             st.caption("You will be signed out of camp automatically. Passengers sign themselves out on the main page.")
-            driver_code = st.text_input("Driver code", type="password", max_chars=4)
+            driver_code = code_box("Driver code", max_chars=4)
             purpose = st.selectbox("Purpose", VAN_PURPOSES)
             other_purpose = ""
             if purpose == "Other":
@@ -3825,7 +3842,7 @@ def page_group_signout(staff_pins: dict, staff_names: list):
     # know the leader's own current status, so identify them first.
     if not leader:
         with st.form(f"group_lookup_form_{g_nonce}", clear_on_submit=True):
-            leader_code = st.text_input("Leader code", type="password", max_chars=4, key=f"group_leader_code_{g_nonce}")
+            leader_code = code_box("Leader code", max_chars=4, key=f"group_leader_code_{g_nonce}")
             lookup_go = st.form_submit_button("Continue", use_container_width=True)
         if lookup_go:
             found, err = resolve_code(leader_code, pin_lookup)
@@ -3957,7 +3974,6 @@ def driver_cert_status(name: str):
 
 def render_driver_certifications():
     """Admin: the digital replacement for the paper certification clipboard in each van."""
-    section_title("Driver Certifications")
     st.caption(
         "Everyone cleared to drive, with the dates on file. An expired driver is blocked at van checkout. "
         "Edit the dates in the drivers tab of your Google Sheet (certified_on and expires_on)."
@@ -3977,7 +3993,6 @@ def render_driver_certifications():
         mime="text/csv",
         key="driver_cert_csv",
     )
-    st.markdown("---")
 
 
 def downtime_sheet_html() -> str:
@@ -4006,7 +4021,6 @@ def downtime_sheet_html() -> str:
 
 
 def render_downtime_sheet():
-    section_title("Paper Sheet for Downtime")
     st.caption(
         "If the internet is down, print this and have staff write their sign-outs and sign-ins on it. "
         "It lists every active staff member. Keep a printed copy at the kiosk."
@@ -4018,7 +4032,6 @@ def render_downtime_sheet():
         mime="text/html",
         key="downtime_sheet_dl",
     )
-    st.markdown("---")
 
 
 # Columns the app itself owns. Everything else in the staff tab (phone, email,
@@ -4028,7 +4041,6 @@ _STAFF_RESERVED_COLUMNS = {"name", "pin", "active", "admin"}
 
 def render_staff_directory():
     """Admin: search staff by name, tap a name, see their info. Never shows codes."""
-    section_title("Staff Directory")
     st.caption(
         "Search by name, then tap a name to see their details. Phone numbers, emails and "
         "anything else live in extra columns on the staff tab of your Google Sheet."
@@ -4104,7 +4116,6 @@ def render_staff_directory():
         f"font-weight:800;text-transform:uppercase;margin-bottom:6px'>{esc(picked)}</div>{lines}</div>",
         unsafe_allow_html=True,
     )
-    st.markdown("---")
 
 
 def page_admin_history(staff_pins: dict):
@@ -4116,7 +4127,7 @@ def page_admin_history(staff_pins: dict):
 
     if not st.session_state.admin_authenticated:
         st.info("Admin access is password protected.")
-        pw = st.text_input("Enter admin password", type="password", key="admin_pw_input")
+        pw = code_box("Enter admin password", key="admin_pw_input")
         col_pw_btn, _ = st.columns([1, 3])
         with col_pw_btn:
             if st.button("Unlock Admin", key="admin_pw_btn"):
@@ -4141,7 +4152,28 @@ def page_admin_history(staff_pins: dict):
             st.success("Admin area locked again.")
             st.rerun()
 
-    with st.expander("New Camp Setup (run once, on a brand new spreadsheet)", expanded=False):
+    ADMIN_GROUPS = ["Today", "People", "History", "Setup"]
+    admin_tabs = dict(zip(ADMIN_GROUPS, st.tabs(ADMIN_GROUPS))) if CFG.compact_admin else {}
+
+    @contextlib.contextmanager
+    def admin_section(title, group, open_=False, divider=True, plain_expander=False):
+        """One block of the admin page. Compact camps get it as a collapsible row inside
+        a tab (Today, People, History, Setup). Everyone else gets the original look:
+        a title, the content, a divider (or the original expander for plain_expander)."""
+        if CFG.compact_admin:
+            with admin_tabs[group]:
+                with st.expander(title, expanded=open_):
+                    yield
+        elif plain_expander:
+            with st.expander(title, expanded=False):
+                yield
+        else:
+            section_title(title)
+            yield
+            if divider:
+                st.markdown("---")
+
+    with admin_section("New Camp Setup (run once, on a brand new spreadsheet)", "Setup", plain_expander=True):
         st.caption(
             "Creates every tab this app needs — staff, drivers, days_off, logs, vans, "
             "and the auto-managed tabs below them — with the right headers, so a fresh "
@@ -4164,669 +4196,649 @@ def page_admin_history(staff_pins: dict):
     # CAMPWIDE EMERGENCY: the most urgent control on this page, so it sits
     # above everything else here.
     # -------------------------------------------------
-    section_title("Campwide Emergency")
 
-    em_flash = st.session_state.pop("emergency_flash", "")
-    if em_flash:
-        st.success(em_flash)
-    em_err = st.session_state.pop("emergency_error", "")
-    if em_err:
-        st.error(em_err)
+    with admin_section('Campwide Emergency', 'Today', open_=True):
+        em_flash = st.session_state.pop("emergency_flash", "")
+        if em_flash:
+            st.success(em_flash)
+        em_err = st.session_state.pop("emergency_error", "")
+        if em_err:
+            st.error(em_err)
 
-    if is_emergency_active():
-        active_msg = get_emergency_message()
-        st.error("EMERGENCY IS ACTIVE" + (f" — {active_msg}" if active_msg else ""))
-        st.caption("Every page (Sign In/Out, Who's Out, Vans, Admin) is showing this banner right now.")
-        with st.form("emergency_clear_form", clear_on_submit=True):
-            em_clear_code = st.text_input("Your admin code", type="password", max_chars=4, key="emergency_clear_code")
-            em_clear_go = st.form_submit_button("Clear Emergency")
-        if em_clear_go:
-            admin_name, err = resolve_admin_code(em_clear_code, staff_pins)
-            if err:
-                st.session_state["emergency_error"] = err
-            else:
-                set_emergency(False)
-                log_audit_event(admin_name, "Emergency cleared")
-                notify_phone(f"{CAMP_NOTIFY_PREFIX}: Emergency CLEARED", f"Cleared by {admin_name}.")
-                st.session_state["emergency_flash"] = f"Emergency cleared by {admin_name}."
-            st.rerun()
-    else:
-        st.caption(
-            "Puts a red banner on every page, campwide, until an admin clears it. "
-            "Use for a real emergency only — this is deliberately hard to miss."
-        )
-        with st.form("emergency_declare_form", clear_on_submit=True):
-            em_msg = st.text_input(
-                "Message shown to everyone (optional)",
-                key="emergency_declare_msg",
-                placeholder="e.g. Meet at the flagpole",
+        if is_emergency_active():
+            active_msg = get_emergency_message()
+            st.error("EMERGENCY IS ACTIVE" + (f" — {active_msg}" if active_msg else ""))
+            st.caption("Every page (Sign In/Out, Who's Out, Vans, Admin) is showing this banner right now.")
+            with st.form("emergency_clear_form", clear_on_submit=True):
+                em_clear_code = code_box("Your admin code", max_chars=4, key="emergency_clear_code")
+                em_clear_go = st.form_submit_button("Clear Emergency")
+            if em_clear_go:
+                admin_name, err = resolve_admin_code(em_clear_code, staff_pins)
+                if err:
+                    st.session_state["emergency_error"] = err
+                else:
+                    set_emergency(False)
+                    log_audit_event(admin_name, "Emergency cleared")
+                    notify_phone(f"{CAMP_NOTIFY_PREFIX}: Emergency CLEARED", f"Cleared by {admin_name}.")
+                    st.session_state["emergency_flash"] = f"Emergency cleared by {admin_name}."
+                st.rerun()
+        else:
+            st.caption(
+                "Puts a red banner on every page, campwide, until an admin clears it. "
+                "Use for a real emergency only — this is deliberately hard to miss."
             )
-            em_declare_code = st.text_input("Your admin code", type="password", max_chars=4, key="emergency_declare_code")
-            em_confirm = st.checkbox("I understand this puts a red banner on every screen, campwide.")
-            em_go = st.form_submit_button("DECLARE EMERGENCY")
-        if em_go:
-            admin_name, err = resolve_admin_code(em_declare_code, staff_pins)
-            if err:
-                st.session_state["emergency_error"] = err
-            elif not em_confirm:
-                st.session_state["emergency_error"] = "Tick the confirm box first."
-            else:
-                set_emergency(True, em_msg.strip())
-                detail = f" {em_msg.strip()}" if em_msg.strip() else ""
-                log_audit_event(admin_name, "Emergency declared", em_msg.strip())
-                notify_phone(f"{CAMP_NOTIFY_PREFIX}: EMERGENCY DECLARED", f"By {admin_name}.{detail}")
-                st.session_state["emergency_flash"] = f"Emergency declared by {admin_name}."
-            st.rerun()
-
-    st.markdown("---")
+            with st.form("emergency_declare_form", clear_on_submit=True):
+                em_msg = st.text_input(
+                    "Message shown to everyone (optional)",
+                    key="emergency_declare_msg",
+                    placeholder="e.g. Meet at the flagpole",
+                )
+                em_declare_code = code_box("Your admin code", max_chars=4, key="emergency_declare_code")
+                em_confirm = st.checkbox("I understand this puts a red banner on every screen, campwide.")
+                em_go = st.form_submit_button("DECLARE EMERGENCY")
+            if em_go:
+                admin_name, err = resolve_admin_code(em_declare_code, staff_pins)
+                if err:
+                    st.session_state["emergency_error"] = err
+                elif not em_confirm:
+                    st.session_state["emergency_error"] = "Tick the confirm box first."
+                else:
+                    set_emergency(True, em_msg.strip())
+                    detail = f" {em_msg.strip()}" if em_msg.strip() else ""
+                    log_audit_event(admin_name, "Emergency declared", em_msg.strip())
+                    notify_phone(f"{CAMP_NOTIFY_PREFIX}: EMERGENCY DECLARED", f"By {admin_name}.{detail}")
+                    st.session_state["emergency_flash"] = f"Emergency declared by {admin_name}."
+                st.rerun()
 
     # -------------------------------------------------
     # ADMIN SIGN-IN: fix the board when someone forgot
     # -------------------------------------------------
-    admin_flash = st.session_state.pop("admin_flash", "")
-    if admin_flash:
-        st.success(admin_flash)
+    with admin_section('Sign Someone Back In', 'Today', open_=True):
+        admin_flash = st.session_state.pop("admin_flash", "")
+        if admin_flash:
+            st.success(admin_flash)
 
-    section_title("Sign Someone Back In")
-    st.caption("For when a staff member forgot to sign in. Pick the person, type your admin code, and sign them in.")
+        st.caption("For when a staff member forgot to sign in. Pick the person, type your admin code, and sign them in.")
 
-    df_out_now = get_currently_out(load_current_status_df_cached())
-    out_names_now = sorted(df_out_now["name"].tolist())
+        df_out_now = get_currently_out(load_current_status_df_cached())
+        out_names_now = sorted(df_out_now["name"].tolist())
 
-    if not out_names_now:
-        empty_note("No staff are currently signed out.")
-    else:
-        with st.form("admin_signin_form", clear_on_submit=True):
-            who = st.selectbox("Who is signed out?", out_names_now)
-            admin_code = st.text_input("Your admin code", type="password", max_chars=4)
-            do_signin = st.form_submit_button("Sign This Person In")
+        if not out_names_now:
+            empty_note("No staff are currently signed out.")
+        else:
+            with st.form("admin_signin_form", clear_on_submit=True):
+                who = st.selectbox("Who is signed out?", out_names_now)
+                admin_code = code_box("Your admin code", max_chars=4)
+                do_signin = st.form_submit_button("Sign This Person In")
 
-        if do_signin:
-            admin_name, err = resolve_admin_code(admin_code, staff_pins)
-            if err:
-                st.error(err)
-            else:
-                row = df_out_now[df_out_now["name"] == who].iloc[0]
-                # An admin fixing the board must still record that they were
-                # late, recomputed from the current reason.
-                mins = row_minutes_late(row)
-                late_note = f"LATE {mins} min" if mins > 0 else ""
-                with st.spinner("One moment..."):
-                    append_log_row(
-                        who,
-                        row["reason"],
-                        f"{ADMIN_SIGNIN_TAG}|{admin_name}",
-                        action="IN",
-                        status="IN",
-                        late=late_note,
-                    )
-                extra = f" LATE by {mins} min." if mins > 0 else ""
-                st.session_state["admin_flash"] = f"{who} signed in by {admin_name}.{extra}"
-                st.rerun()
-
-    st.markdown("---")
+            if do_signin:
+                admin_name, err = resolve_admin_code(admin_code, staff_pins)
+                if err:
+                    st.error(err)
+                else:
+                    row = df_out_now[df_out_now["name"] == who].iloc[0]
+                    # An admin fixing the board must still record that they were
+                    # late, recomputed from the current reason.
+                    mins = row_minutes_late(row)
+                    late_note = f"LATE {mins} min" if mins > 0 else ""
+                    with st.spinner("One moment..."):
+                        append_log_row(
+                            who,
+                            row["reason"],
+                            f"{ADMIN_SIGNIN_TAG}|{admin_name}",
+                            action="IN",
+                            status="IN",
+                            late=late_note,
+                        )
+                    extra = f" LATE by {mins} min." if mins > 0 else ""
+                    st.session_state["admin_flash"] = f"{who} signed in by {admin_name}.{extra}"
+                    st.rerun()
 
     # -------------------------------------------------
     # ADMIN VAN SIGN-IN: fix a van left showing OUT
     # -------------------------------------------------
-    section_title("Sign a Van Back In")
-    st.caption("For when a van was left showing out. Pick the van, type your admin code, and sign it in.")
+    with admin_section('Sign a Van Back In', 'Today', open_=False):
+        st.caption("For when a van was left showing out. Pick the van, type your admin code, and sign it in.")
 
-    vans_now = load_vans_df_cached()
-    status_now = compute_van_status(vans_now)
-    out_vans_now = [v for v in VANS if status_now.get(v, {}).get("status") == "OUT"]
+        vans_now = load_vans_df_cached()
+        status_now = compute_van_status(vans_now)
+        out_vans_now = [v for v in VANS if status_now.get(v, {}).get("status") == "OUT"]
 
-    if not out_vans_now:
-        empty_note("No vans are currently signed out.")
-    else:
-        with st.form("admin_van_signin_form", clear_on_submit=True):
-            which_van = st.selectbox("Which van is out?", out_vans_now, format_func=van_label)
-            van_admin_code = st.text_input("Your admin code", type="password", max_chars=4, key="admin_van_code")
-            do_van_signin = st.form_submit_button("Sign This Van In")
+        if not out_vans_now:
+            empty_note("No vans are currently signed out.")
+        else:
+            with st.form("admin_van_signin_form", clear_on_submit=True):
+                which_van = st.selectbox("Which van is out?", out_vans_now, format_func=van_label)
+                van_admin_code = code_box("Your admin code", max_chars=4, key="admin_van_code")
+                do_van_signin = st.form_submit_button("Sign This Van In")
 
-        if do_van_signin:
-            admin_name, err = resolve_admin_code(van_admin_code, staff_pins)
-            if err:
-                st.error(err)
-            else:
-                # Pull the van's original checkout so we can free its driver too.
-                orig_driver = ""
-                last_purpose = ""
-                last_other_purpose = ""
-                try:
-                    tmp = _sorted_by_recency(vans_now.copy())
-                    vr = tmp[tmp["van"] == which_van]
-                    if not vr.empty:
-                        outr = vr[vr["status"].astype(str).str.upper() == "OUT"]
-                        src = outr.iloc[-1] if not outr.empty else vr.iloc[-1]
-                        orig_driver = str(src.get("driver", "")).strip()
-                        last_purpose = str(src.get("purpose", "")).strip()
-                        last_other_purpose = str(src.get("other_purpose", "")).strip()
-                except Exception:
-                    pass
+            if do_van_signin:
+                admin_name, err = resolve_admin_code(van_admin_code, staff_pins)
+                if err:
+                    st.error(err)
+                else:
+                    # Pull the van's original checkout so we can free its driver too.
+                    orig_driver = ""
+                    last_purpose = ""
+                    last_other_purpose = ""
+                    try:
+                        tmp = _sorted_by_recency(vans_now.copy())
+                        vr = tmp[tmp["van"] == which_van]
+                        if not vr.empty:
+                            outr = vr[vr["status"].astype(str).str.upper() == "OUT"]
+                            src = outr.iloc[-1] if not outr.empty else vr.iloc[-1]
+                            orig_driver = str(src.get("driver", "")).strip()
+                            last_purpose = str(src.get("purpose", "")).strip()
+                            last_other_purpose = str(src.get("other_purpose", "")).strip()
+                    except Exception:
+                        pass
 
-                van_row = {
-                    "id": str(uuid.uuid4())[:8],
-                    "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
-                    "van": which_van,
-                    "driver": orig_driver or admin_name,
-                    "purpose": last_purpose,
-                    "passengers": "",
-                    "other_purpose": (last_other_purpose + f" [{ADMIN_SIGNIN_TAG}|{admin_name}]").strip(),
-                    "action": "CHECKIN",
-                    "status": "IN",
-                    "gas_left": "",
-                }
-                try:
-                    append_vans_row(van_row)
-                except Exception:
-                    st.error("Could not sign the van in. Please try again.")
-                    st.stop()
+                    van_row = {
+                        "id": str(uuid.uuid4())[:8],
+                        "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
+                        "van": which_van,
+                        "driver": orig_driver or admin_name,
+                        "purpose": last_purpose,
+                        "passengers": "",
+                        "other_purpose": (last_other_purpose + f" [{ADMIN_SIGNIN_TAG}|{admin_name}]").strip(),
+                        "action": "CHECKIN",
+                        "status": "IN",
+                        "gas_left": "",
+                    }
+                    try:
+                        append_vans_row(van_row)
+                    except Exception:
+                        st.error("Could not sign the van in. Please try again.")
+                        st.stop()
 
-                # Free everyone stranded under this van's tag, read live.
-                try:
-                    signin_everyone_on_van(which_van)
-                except Exception:
-                    pass
+                    # Free everyone stranded under this van's tag, read live.
+                    try:
+                        signin_everyone_on_van(which_van)
+                    except Exception:
+                        pass
 
-                notify_vans(f"{CAMP_NOTIFY_PREFIX}: Van IN", f"{van_label(which_van)} signed in by admin {admin_name}")
-                st.session_state["admin_flash"] = f"{van_label(which_van)} signed in by {admin_name}."
-                st.rerun()
-
-    st.markdown("---")
+                    notify_vans(f"{CAMP_NOTIFY_PREFIX}: Van IN", f"{van_label(which_van)} signed in by admin {admin_name}")
+                    st.session_state["admin_flash"] = f"{van_label(which_van)} signed in by {admin_name}."
+                    st.rerun()
 
     # -------------------------------------------------
     # ARCHIVE: keep the live tab small, keep history forever
     # -------------------------------------------------
-    section_title("Archive Old Logs")
-    st.caption(
-        "Moves old, closed-out sign-outs to a separate logs_archive tab so the "
-        "app stays fast. Everyone still signed out is kept, plus the last "
-        f"{ARCHIVE_KEEP_DAYS} days. Nothing is ever deleted, only moved. This "
-        f"now also runs automatically every night around {AUTO_ARCHIVE_HOUR}:00 "
-        "AM — use the button below only if you want it to run right now."
-    )
-
-    arch_flash = st.session_state.pop("archive_flash", "")
-    if arch_flash:
-        st.success(arch_flash)
-    arch_err = st.session_state.pop("archive_error", "")
-    if arch_err:
-        st.error(arch_err)
-
-    with st.form("archive_form", clear_on_submit=True):
-        st.caption("Type your admin code and confirm to archive.")
-        arch_code = st.text_input("Your admin code", type="password", max_chars=4, key="archive_admin_code")
-        arch_confirm = st.checkbox("I understand old closed-out rows will be moved to the archive tab.")
-        arch_go = st.form_submit_button("Archive Old Logs Now")
-
-    if arch_go:
-        admin_name, err = resolve_admin_code(arch_code, staff_pins)
-        if err:
-            st.session_state["archive_error"] = err
-            st.rerun()
-        elif not arch_confirm:
-            st.session_state["archive_error"] = "Tick the confirm box first."
-            st.rerun()
-        else:
-            with st.spinner("Archiving. This can take a moment for thousands of rows."):
-                res = archive_old_logs()
-            if res["ok"]:
-                log_audit_event(admin_name, "Archived old logs", f"{res['archived']} rows")
-                notify_phone(f"{CAMP_NOTIFY_PREFIX}: Logs archived", f"{admin_name} archived {res['archived']} rows.")
-                st.session_state["archive_flash"] = res["message"]
-            else:
-                st.session_state["archive_error"] = res["message"]
-            st.rerun()
-
-    st.caption("Full 10-year record, live plus archive, in one file:")
-    # Built only on demand. This reads BOTH tabs, which can be thousands of
-    # rows, so doing it on every admin page load would make the page crawl.
-    # The button prepares it, then the download appears.
-    if st.button("Prepare full history file", key="prep_full_history"):
-        try:
-            with st.spinner("Gathering live and archived history..."):
-                st.session_state["full_history_csv"] = build_full_history_csv()
-        except Exception:
-            st.session_state["full_history_csv"] = ""
-            st.error("Could not build the full-history file right now. Try again in a moment.")
-
-    full_csv = st.session_state.get("full_history_csv", "")
-    if full_csv:
-        st.download_button(
-            "Download FULL History (live + archive) as CSV",
-            data=full_csv,
-            file_name=f"{CAMP_CSV_PREFIX}_full_signout_history.csv",
-            mime="text/csv",
-            key="full_history_dl",
+    with admin_section('Archive Old Logs', 'Setup', open_=False):
+        st.caption(
+            "Moves old, closed-out sign-outs to a separate logs_archive tab so the "
+            "app stays fast. Everyone still signed out is kept, plus the last "
+            f"{ARCHIVE_KEEP_DAYS} days. Nothing is ever deleted, only moved. This "
+            f"now also runs automatically every night around {AUTO_ARCHIVE_HOUR}:00 "
+            "AM — use the button below only if you want it to run right now."
         )
-    elif full_csv == "":
-        st.caption("Press the button above to build the download.")
 
-    st.markdown("---")
+        arch_flash = st.session_state.pop("archive_flash", "")
+        if arch_flash:
+            st.success(arch_flash)
+        arch_err = st.session_state.pop("archive_error", "")
+        if arch_err:
+            st.error(arch_err)
+
+        with st.form("archive_form", clear_on_submit=True):
+            st.caption("Type your admin code and confirm to archive.")
+            arch_code = code_box("Your admin code", max_chars=4, key="archive_admin_code")
+            arch_confirm = st.checkbox("I understand old closed-out rows will be moved to the archive tab.")
+            arch_go = st.form_submit_button("Archive Old Logs Now")
+
+        if arch_go:
+            admin_name, err = resolve_admin_code(arch_code, staff_pins)
+            if err:
+                st.session_state["archive_error"] = err
+                st.rerun()
+            elif not arch_confirm:
+                st.session_state["archive_error"] = "Tick the confirm box first."
+                st.rerun()
+            else:
+                with st.spinner("Archiving. This can take a moment for thousands of rows."):
+                    res = archive_old_logs()
+                if res["ok"]:
+                    log_audit_event(admin_name, "Archived old logs", f"{res['archived']} rows")
+                    notify_phone(f"{CAMP_NOTIFY_PREFIX}: Logs archived", f"{admin_name} archived {res['archived']} rows.")
+                    st.session_state["archive_flash"] = res["message"]
+                else:
+                    st.session_state["archive_error"] = res["message"]
+                st.rerun()
+
+        st.caption("Full 10-year record, live plus archive, in one file:")
+        # Built only on demand. This reads BOTH tabs, which can be thousands of
+        # rows, so doing it on every admin page load would make the page crawl.
+        # The button prepares it, then the download appears.
+        if st.button("Prepare full history file", key="prep_full_history"):
+            try:
+                with st.spinner("Gathering live and archived history..."):
+                    st.session_state["full_history_csv"] = build_full_history_csv()
+            except Exception:
+                st.session_state["full_history_csv"] = ""
+                st.error("Could not build the full-history file right now. Try again in a moment.")
+
+        full_csv = st.session_state.get("full_history_csv", "")
+        if full_csv:
+            st.download_button(
+                "Download FULL History (live + archive) as CSV",
+                data=full_csv,
+                file_name=f"{CAMP_CSV_PREFIX}_full_signout_history.csv",
+                mime="text/csv",
+                key="full_history_dl",
+            )
+        elif full_csv == "":
+            st.caption("Press the button above to build the download.")
 
     # -------------------------------------------------
     # VAN ARCHIVE: same idea as the logs archive, for the vans tab
     # -------------------------------------------------
-    section_title("Archive Old Van Logs")
-    st.caption(
-        "Moves old, closed-out van trips to a separate vans_archive tab, same "
-        "idea as the logs archive above. Every van still out is kept, plus the "
-        f"last {ARCHIVE_KEEP_DAYS} days. Nothing is ever deleted, only moved. "
-        f"This also runs automatically every night around {AUTO_ARCHIVE_HOUR}:00 "
-        "AM — use the button below only if you want it to run right now."
-    )
-
-    van_arch_flash = st.session_state.pop("van_archive_flash", "")
-    if van_arch_flash:
-        st.success(van_arch_flash)
-    van_arch_err = st.session_state.pop("van_archive_error", "")
-    if van_arch_err:
-        st.error(van_arch_err)
-
-    with st.form("van_archive_form", clear_on_submit=True):
-        st.caption("Type your admin code and confirm to archive.")
-        van_arch_code = st.text_input("Your admin code", type="password", max_chars=4, key="van_archive_admin_code")
-        van_arch_confirm = st.checkbox("I understand old closed-out van rows will be moved to the archive tab.")
-        van_arch_go = st.form_submit_button("Archive Old Van Logs Now")
-
-    if van_arch_go:
-        admin_name, err = resolve_admin_code(van_arch_code, staff_pins)
-        if err:
-            st.session_state["van_archive_error"] = err
-            st.rerun()
-        elif not van_arch_confirm:
-            st.session_state["van_archive_error"] = "Tick the confirm box first."
-            st.rerun()
-        else:
-            with st.spinner("Archiving van logs..."):
-                van_res = archive_old_vans()
-            if van_res["ok"]:
-                log_audit_event(admin_name, "Archived old van logs", f"{van_res['archived']} rows")
-                notify_phone(f"{CAMP_NOTIFY_PREFIX}: Van logs archived", f"{admin_name} archived {van_res['archived']} van rows.")
-                st.session_state["van_archive_flash"] = van_res["message"]
-            else:
-                st.session_state["van_archive_error"] = van_res["message"]
-            st.rerun()
-
-    st.caption("Full van history, live plus archive, in one file:")
-    if st.button("Prepare full van history file", key="prep_full_van_history"):
-        try:
-            with st.spinner("Gathering live and archived van history..."):
-                st.session_state["full_van_history_csv"] = build_full_van_history_csv()
-        except Exception:
-            st.session_state["full_van_history_csv"] = ""
-            st.error("Could not build the full van-history file right now. Try again in a moment.")
-
-    full_van_csv = st.session_state.get("full_van_history_csv", "")
-    if full_van_csv:
-        st.download_button(
-            "Download FULL Van History (live + archive) as CSV",
-            data=full_van_csv,
-            file_name=f"{CAMP_CSV_PREFIX}_full_van_history.csv",
-            mime="text/csv",
-            key="full_van_history_dl",
+    with admin_section('Archive Old Van Logs', 'Setup', open_=False):
+        st.caption(
+            "Moves old, closed-out van trips to a separate vans_archive tab, same "
+            "idea as the logs archive above. Every van still out is kept, plus the "
+            f"last {ARCHIVE_KEEP_DAYS} days. Nothing is ever deleted, only moved. "
+            f"This also runs automatically every night around {AUTO_ARCHIVE_HOUR}:00 "
+            "AM — use the button below only if you want it to run right now."
         )
-    elif full_van_csv == "":
-        st.caption("Press the button above to build the download.")
 
-    st.markdown("---")
+        van_arch_flash = st.session_state.pop("van_archive_flash", "")
+        if van_arch_flash:
+            st.success(van_arch_flash)
+        van_arch_err = st.session_state.pop("van_archive_error", "")
+        if van_arch_err:
+            st.error(van_arch_err)
+
+        with st.form("van_archive_form", clear_on_submit=True):
+            st.caption("Type your admin code and confirm to archive.")
+            van_arch_code = code_box("Your admin code", max_chars=4, key="van_archive_admin_code")
+            van_arch_confirm = st.checkbox("I understand old closed-out van rows will be moved to the archive tab.")
+            van_arch_go = st.form_submit_button("Archive Old Van Logs Now")
+
+        if van_arch_go:
+            admin_name, err = resolve_admin_code(van_arch_code, staff_pins)
+            if err:
+                st.session_state["van_archive_error"] = err
+                st.rerun()
+            elif not van_arch_confirm:
+                st.session_state["van_archive_error"] = "Tick the confirm box first."
+                st.rerun()
+            else:
+                with st.spinner("Archiving van logs..."):
+                    van_res = archive_old_vans()
+                if van_res["ok"]:
+                    log_audit_event(admin_name, "Archived old van logs", f"{van_res['archived']} rows")
+                    notify_phone(f"{CAMP_NOTIFY_PREFIX}: Van logs archived", f"{admin_name} archived {van_res['archived']} van rows.")
+                    st.session_state["van_archive_flash"] = van_res["message"]
+                else:
+                    st.session_state["van_archive_error"] = van_res["message"]
+                st.rerun()
+
+        st.caption("Full van history, live plus archive, in one file:")
+        if st.button("Prepare full van history file", key="prep_full_van_history"):
+            try:
+                with st.spinner("Gathering live and archived van history..."):
+                    st.session_state["full_van_history_csv"] = build_full_van_history_csv()
+            except Exception:
+                st.session_state["full_van_history_csv"] = ""
+                st.error("Could not build the full van-history file right now. Try again in a moment.")
+
+        full_van_csv = st.session_state.get("full_van_history_csv", "")
+        if full_van_csv:
+            st.download_button(
+                "Download FULL Van History (live + archive) as CSV",
+                data=full_van_csv,
+                file_name=f"{CAMP_CSV_PREFIX}_full_van_history.csv",
+                mime="text/csv",
+                key="full_van_history_dl",
+            )
+        elif full_van_csv == "":
+            st.caption("Press the button above to build the download.")
 
     # -------------------------------------------------
     # STATUS CACHE: recovery tool for the current_status fast-path tab
     # -------------------------------------------------
-    section_title("Rebuild Status Cache")
-    st.caption(
-        "The board and sign-in box read a small current_status tab instead of "
-        "the full history, to stay fast. It updates itself on every sign-in/out "
-        "automatically. Use this only if something looks wrong on the board "
-        "after hand-editing rows directly in the logs sheet — it recomputes "
-        "current_status from scratch by scanning the full history. Nothing in "
-        "logs is ever touched by this."
-    )
-    if st.button("Rebuild Status Cache From History", key="rebuild_status_cache_btn"):
-        try:
-            with st.spinner("Recomputing current status from the full log history..."):
-                clear_logs_cache()
-                rebuild_current_status_from_logs()
-            st.success("Status cache rebuilt from history.")
-        except Exception:
-            st.error("Could not rebuild the status cache right now. Please try again.")
-
-    st.markdown("---")
-
-    if CFG.staff_directory:
-        render_staff_directory()
-    if CFG.driver_cert_tracking:
-        render_driver_certifications()
-    if CFG.downtime_sheet:
-        render_downtime_sheet()
+    with admin_section('Rebuild Status Cache', 'Setup', open_=False):
+        st.caption(
+            "The board and sign-in box read a small current_status tab instead of "
+            "the full history, to stay fast. It updates itself on every sign-in/out "
+            "automatically. Use this only if something looks wrong on the board "
+            "after hand-editing rows directly in the logs sheet — it recomputes "
+            "current_status from scratch by scanning the full history. Nothing in "
+            "logs is ever touched by this."
+        )
+        if st.button("Rebuild Status Cache From History", key="rebuild_status_cache_btn"):
+            try:
+                with st.spinner("Recomputing current status from the full log history..."):
+                    clear_logs_cache()
+                    rebuild_current_status_from_logs()
+                st.success("Status cache rebuilt from history.")
+            except Exception:
+                st.error("Could not rebuild the status cache right now. Please try again.")
 
     # -------------------------------------------------
     # PIN SECURITY: one-way migration from plaintext to hashed PINs
     # -------------------------------------------------
-    section_title("Staff PIN Security")
-    pin_flash = st.session_state.pop("pin_migrate_flash", "")
-    if pin_flash:
-        st.success(pin_flash)
-    pin_err = st.session_state.pop("pin_migrate_error", "")
-    if pin_err:
-        st.error(pin_err)
+    with admin_section('Staff PIN Security', 'People', open_=False):
+        pin_flash = st.session_state.pop("pin_migrate_flash", "")
+        if pin_flash:
+            st.success(pin_flash)
+        pin_err = st.session_state.pop("pin_migrate_error", "")
+        if pin_err:
+            st.error(pin_err)
 
-    unhashed_count = count_unhashed_staff_pins()
-    if unhashed_count == 0:
-        st.caption(
-            "All staff PINs are already hashed. Nobody with read access to the "
-            "staff sheet can see anyone's actual code."
-        )
-    else:
-        st.warning(
-            f"{unhashed_count} staff PIN(s) are still stored as plain text in the staff "
-            "sheet — anyone with read access to that sheet can see them. Hashing replaces "
-            "each plaintext code with a one-way scramble; staff keep signing in with the "
-            "same code, but the sheet itself no longer reveals it. This cannot be undone "
-            "from within the app — keep a backup of the staff tab first if you ever want "
-            "the original codes recoverable."
-        )
-        with st.form("pin_migrate_form", clear_on_submit=True):
-            pin_migrate_code = st.text_input(
-                "Your admin code", type="password", max_chars=4, key="pin_migrate_code"
+        unhashed_count = count_unhashed_staff_pins()
+        if unhashed_count == 0:
+            st.caption(
+                "All staff PINs are already hashed. Nobody with read access to the "
+                "staff sheet can see anyone's actual code."
             )
-            pin_migrate_confirm = st.checkbox(
-                "I understand this is permanent and I have a backup if I want one."
+        else:
+            st.warning(
+                f"{unhashed_count} staff PIN(s) are still stored as plain text in the staff "
+                "sheet — anyone with read access to that sheet can see them. Hashing replaces "
+                "each plaintext code with a one-way scramble; staff keep signing in with the "
+                "same code, but the sheet itself no longer reveals it. This cannot be undone "
+                "from within the app — keep a backup of the staff tab first if you ever want "
+                "the original codes recoverable."
             )
-            pin_migrate_go = st.form_submit_button("Hash All Plaintext PINs Now")
-        if pin_migrate_go:
-            admin_name, err = resolve_admin_code(pin_migrate_code, staff_pins)
-            if err:
-                st.session_state["pin_migrate_error"] = err
-            elif not pin_migrate_confirm:
-                st.session_state["pin_migrate_error"] = "Tick the confirm box first."
-            else:
-                try:
-                    n = migrate_staff_pins_to_hashed()
-                    log_audit_event(admin_name, "Hashed plaintext PINs", f"{n} row(s)")
-                    st.session_state["pin_migrate_flash"] = f"{admin_name} hashed {n} staff PIN(s)."
-                except Exception:
-                    st.session_state["pin_migrate_error"] = (
-                        "Could not update the staff sheet right now. Please try again."
-                    )
-            st.rerun()
-
-    st.markdown("---")
+            with st.form("pin_migrate_form", clear_on_submit=True):
+                pin_migrate_code = code_box(
+                    "Your admin code", max_chars=4, key="pin_migrate_code"
+                )
+                pin_migrate_confirm = st.checkbox(
+                    "I understand this is permanent and I have a backup if I want one."
+                )
+                pin_migrate_go = st.form_submit_button("Hash All Plaintext PINs Now")
+            if pin_migrate_go:
+                admin_name, err = resolve_admin_code(pin_migrate_code, staff_pins)
+                if err:
+                    st.session_state["pin_migrate_error"] = err
+                elif not pin_migrate_confirm:
+                    st.session_state["pin_migrate_error"] = "Tick the confirm box first."
+                else:
+                    try:
+                        n = migrate_staff_pins_to_hashed()
+                        log_audit_event(admin_name, "Hashed plaintext PINs", f"{n} row(s)")
+                        st.session_state["pin_migrate_flash"] = f"{admin_name} hashed {n} staff PIN(s)."
+                    except Exception:
+                        st.session_state["pin_migrate_error"] = (
+                            "Could not update the staff sheet right now. Please try again."
+                        )
+                st.rerun()
 
     # -------------------------------------------------
     # AUDIT LOG: read-only trail of who did what admin action, and when
     # -------------------------------------------------
-    section_title("Audit Log")
-    df_audit = load_audit_log_df_cached()
-    if df_audit.empty:
-        st.caption("No audit events recorded yet. Every emergency, archive, deletion, and PIN migration shows up here.")
-    else:
-        df_audit_view = df_audit.tail(50).iloc[::-1].copy()
-        df_audit_view["timestamp"] = _parse_ts(df_audit_view["timestamp"]).apply(format_time)
-        df_audit_view = df_audit_view.rename(columns={
-            "timestamp": "When", "admin": "Who", "action": "Action", "detail": "Detail",
-        })
-        cols = [c for c in ["When", "Who", "Action", "Detail"] if c in df_audit_view.columns]
-        st.dataframe(df_audit_view[cols], use_container_width=True)
-        st.caption(f"Showing the most recent {len(df_audit_view)} of {len(df_audit)} audit event(s).")
-
-    st.markdown("---")
-
-    df_logs = load_logs_df_cached()
-
-    # -------------------------------------------------
-    # ANALYTICS: real numbers instead of just a raw filtered table. Computed
-    # entirely from the already-loaded logs/vans DataFrames, so this costs no
-    # extra Sheets round trips.
-    # -------------------------------------------------
-    section_title("Analytics")
-    if df_logs.empty:
-        st.info("No logs recorded yet.")
-    else:
-        df_out_rows = df_logs[df_logs["action"] == "OUT"]
-        df_in_rows = df_logs[df_logs["action"] == "IN"]
-
-        today_date = datetime.now(TZ).date()
-        signouts_today = int((df_out_rows["timestamp"].dt.date == today_date).sum())
-        currently_out_count = len(get_currently_out(load_current_status_df_cached()))
-        late_mask = df_in_rows["late"].astype(str).str.strip() != ""
-        late_rate = (late_mask.sum() / len(df_in_rows) * 100) if len(df_in_rows) else 0
-
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total sign-outs (live tab)", len(df_out_rows))
-        m2.metric("Sign-outs today", signouts_today)
-        m3.metric("Currently out", currently_out_count)
-        m4.metric("Late-return rate", f"{late_rate:.0f}%")
-
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.caption("Sign-outs per day, last 14 days")
-            cutoff = datetime.now(TZ) - timedelta(days=14)
-            recent_out = df_out_rows[df_out_rows["timestamp"] >= cutoff]
-            if recent_out.empty:
-                st.caption("Nothing in the last 14 days.")
-            else:
-                daily_counts = recent_out.groupby(recent_out["timestamp"].dt.date).size()
-                daily_counts.index = daily_counts.index.astype(str)
-                st.bar_chart(daily_counts, color=NAVY)
-        with col_b:
-            st.caption("Top reasons (live tab)")
-            reason_counts = df_out_rows["reason"].value_counts()
-            if reason_counts.empty:
-                st.caption("No reasons recorded yet.")
-            else:
-                st.bar_chart(reason_counts, color=NAVY)
-
-        st.caption("Late-return rate by person (3+ trips, live tab)")
-        late_by_name = (
-            df_in_rows.assign(is_late=late_mask)
-            .groupby("name")
-            .agg(trips=("is_late", "size"), late_count=("is_late", "sum"))
-        )
-        late_by_name = late_by_name[late_by_name["trips"] >= 3].copy()
-        if late_by_name.empty:
-            st.caption("Not enough data yet (need 3+ round trips for someone to show up here).")
+    with admin_section('Audit Log', 'History', open_=False):
+        df_audit = load_audit_log_df_cached()
+        if df_audit.empty:
+            st.caption("No audit events recorded yet. Every emergency, archive, deletion, and PIN migration shows up here.")
         else:
-            late_by_name["late_pct"] = (late_by_name["late_count"] / late_by_name["trips"] * 100).round(0).astype(int)
-            late_by_name = late_by_name.sort_values("late_pct", ascending=False).head(10).reset_index()
-            late_by_name = late_by_name.rename(columns={
-                "name": "Name", "trips": "Trips", "late_count": "Late Returns", "late_pct": "Late %",
+            df_audit_view = df_audit.tail(50).iloc[::-1].copy()
+            df_audit_view["timestamp"] = _parse_ts(df_audit_view["timestamp"]).apply(format_time)
+            df_audit_view = df_audit_view.rename(columns={
+                "timestamp": "When", "admin": "Who", "action": "Action", "detail": "Detail",
             })
-            st.dataframe(late_by_name, use_container_width=True)
+            cols = [c for c in ["When", "Who", "Action", "Detail"] if c in df_audit_view.columns]
+            st.dataframe(df_audit_view[cols], use_container_width=True)
+            st.caption(f"Showing the most recent {len(df_audit_view)} of {len(df_audit)} audit event(s).")
 
-        df_vans_all = load_vans_df_cached()
-        if not df_vans_all.empty and "action" in df_vans_all.columns:
-            van_out_rows = df_vans_all[df_vans_all["action"].astype(str).str.upper() == "OUT"]
-            if not van_out_rows.empty:
-                st.caption("Van trips by vehicle (live tab)")
-                st.bar_chart(van_out_rows["van"].value_counts(), color=NAVY)
+    with admin_section('Analytics', 'History', open_=False):
+        df_logs = load_logs_df_cached()
 
-        weekly_cutoff = datetime.now(TZ) - timedelta(days=7)
-        weekly_out = df_out_rows[df_out_rows["timestamp"] >= weekly_cutoff]
-        weekly_in = df_in_rows[df_in_rows["timestamp"] >= weekly_cutoff]
-        weekly_late = weekly_in["late"].astype(str).str.strip() != ""
-        weekly_summary = (
-            weekly_out.assign(date=weekly_out["timestamp"].dt.date)
-            .groupby("date")
-            .size()
-            .reset_index(name="signouts")
-        )
-        if not weekly_in.empty:
-            late_per_day = weekly_in.assign(is_late=weekly_late, date=weekly_in["timestamp"].dt.date)
-            late_per_day = late_per_day.groupby("date")["is_late"].sum().reset_index(name="late_returns")
-            weekly_summary = weekly_summary.merge(late_per_day, on="date", how="outer").fillna(0)
+        # -------------------------------------------------
+        # ANALYTICS: real numbers instead of just a raw filtered table. Computed
+        # entirely from the already-loaded logs/vans DataFrames, so this costs no
+        # extra Sheets round trips.
+        # -------------------------------------------------
+        if df_logs.empty:
+            st.info("No logs recorded yet.")
         else:
-            weekly_summary["late_returns"] = 0
-        weekly_summary = weekly_summary.sort_values("date")
-        st.download_button(
-            "Download This Week's Summary (CSV)",
-            data=weekly_summary.to_csv(index=False),
-            file_name=f"{CAMP_CSV_PREFIX}_weekly_summary.csv",
-            mime="text/csv",
-        )
+            df_out_rows = df_logs[df_logs["action"] == "OUT"]
+            df_in_rows = df_logs[df_logs["action"] == "IN"]
 
-    st.markdown("---")
+            today_date = datetime.now(TZ).date()
+            signouts_today = int((df_out_rows["timestamp"].dt.date == today_date).sum())
+            currently_out_count = len(get_currently_out(load_current_status_df_cached()))
+            late_mask = df_in_rows["late"].astype(str).str.strip() != ""
+            late_rate = (late_mask.sum() / len(df_in_rows) * 100) if len(df_in_rows) else 0
 
-    section_title("Full Log History")
-    if df_logs.empty:
-        st.info("No logs recorded yet.")
-    else:
-        # Show only the most recent rows so this table stays fast no matter how
-        # large the live tab is. The complete record is always available through
-        # the full-history download and the archive tab.
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total sign-outs (live tab)", len(df_out_rows))
+            m2.metric("Sign-outs today", signouts_today)
+            m3.metric("Currently out", currently_out_count)
+            m4.metric("Late-return rate", f"{late_rate:.0f}%")
 
-        # Filtering BEFORE the row cap, not after, is the whole point: otherwise
-        # looking up one counselor's history (or every Night Off, to see who
-        # keeps coming back late) means scrolling through everyone else's most
-        # recent 200 rows hoping theirs are in there, or downloading the CSV
-        # and searching it by hand.
-        name_options = ["All"] + sorted(
-            n for n in df_logs["name"].astype(str).str.strip().unique() if n
-        )
-        reason_options = ["All"] + sorted(
-            r for r in df_logs["reason"].astype(str).str.strip().unique() if r
-        )
-        filt_col1, filt_col2 = st.columns(2)
-        with filt_col1:
-            name_filter = st.selectbox("Filter by name", name_options, key="admin_history_name_filter")
-        with filt_col2:
-            reason_filter = st.selectbox("Filter by reason", reason_options, key="admin_history_reason_filter")
-        df_scope = df_logs
-        if name_filter != "All":
-            df_scope = df_scope[df_scope["name"] == name_filter]
-        if reason_filter != "All":
-            df_scope = df_scope[df_scope["reason"] == reason_filter]
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.caption("Sign-outs per day, last 14 days")
+                cutoff = datetime.now(TZ) - timedelta(days=14)
+                recent_out = df_out_rows[df_out_rows["timestamp"] >= cutoff]
+                if recent_out.empty:
+                    st.caption("Nothing in the last 14 days.")
+                else:
+                    daily_counts = recent_out.groupby(recent_out["timestamp"].dt.date).size()
+                    daily_counts.index = daily_counts.index.astype(str)
+                    st.bar_chart(daily_counts, color=NAVY)
+            with col_b:
+                st.caption("Top reasons (live tab)")
+                reason_counts = df_out_rows["reason"].value_counts()
+                if reason_counts.empty:
+                    st.caption("No reasons recorded yet.")
+                else:
+                    st.bar_chart(reason_counts, color=NAVY)
 
-        total_rows = len(df_scope)
-        df_display = df_scope.copy()
-        df_display["_ts"] = _parse_ts(df_display["timestamp"], format="mixed")
-        df_display = df_display.sort_values("_ts", na_position="first").drop(columns=["_ts"])
-        scope_bits = [b for b in (name_filter, reason_filter) if b != "All"]
-        scope_desc = " + ".join(scope_bits)
-        if total_rows > HISTORY_TABLE_LIMIT:
-            df_display = df_display.tail(HISTORY_TABLE_LIMIT)
-            scope_label = f"live {scope_desc}" if scope_desc else "live"
-            st.caption(f"Showing the most recent {HISTORY_TABLE_LIMIT} of {total_rows} {scope_label} rows. Use the downloads for the full record.")
-        elif scope_desc:
-            st.caption(f"{total_rows} row(s) for {scope_desc}.")
-        df_display["timestamp_str"] = df_display["timestamp"].apply(format_time)
-        df_display = df_display.rename(columns={
-            "id": "ID",
-            "timestamp_str": "Time",
-            "name": "Name",
-            "reason": "Reason",
-            "other_reason": "Other Details",
-            "action": "Action",
-            "status": "Status",
-            "late": "Late",
-        })
-        cols_show = ["ID", "Time", "Name", "Reason", "Other Details", "Action", "Status", "Late"]
-        for c in cols_show:
-            if c not in df_display.columns:
-                df_display[c] = ""
-        df_display = df_display[cols_show]
-        st.dataframe(df_display, use_container_width=True)
+            st.caption("Late-return rate by person (3+ trips, live tab)")
+            late_by_name = (
+                df_in_rows.assign(is_late=late_mask)
+                .groupby("name")
+                .agg(trips=("is_late", "size"), late_count=("is_late", "sum"))
+            )
+            late_by_name = late_by_name[late_by_name["trips"] >= 3].copy()
+            if late_by_name.empty:
+                st.caption("Not enough data yet (need 3+ round trips for someone to show up here).")
+            else:
+                late_by_name["late_pct"] = (late_by_name["late_count"] / late_by_name["trips"] * 100).round(0).astype(int)
+                late_by_name = late_by_name.sort_values("late_pct", ascending=False).head(10).reset_index()
+                late_by_name = late_by_name.rename(columns={
+                    "name": "Name", "trips": "Trips", "late_count": "Late Returns", "late_pct": "Late %",
+                })
+                st.dataframe(late_by_name, use_container_width=True)
 
-        st.download_button(
-            "Download Full Log as CSV",
-            data=df_display.to_csv(index=False),
-            file_name="signout_log.csv",
-            mime="text/csv",
-        )
+            df_vans_all = load_vans_df_cached()
+            if not df_vans_all.empty and "action" in df_vans_all.columns:
+                van_out_rows = df_vans_all[df_vans_all["action"].astype(str).str.upper() == "OUT"]
+                if not van_out_rows.empty:
+                    st.caption("Van trips by vehicle (live tab)")
+                    st.bar_chart(van_out_rows["van"].value_counts(), color=NAVY)
 
-    st.markdown("---")
-    df_vans = load_vans_df_cached()
-    section_title("Van Log History")
-    if df_vans is None or df_vans.empty:
-        st.info("No van logs recorded yet.")
-    else:
-        # Same reasoning as Full Log History above: filter by van BEFORE the
-        # row cap, so a specific van's trips aren't buried under the other
-        # two vans' most recent rows, and cap the table so it stays fast no
-        # matter how large the live tab is.
-        van_options = ["All"] + VANS
-        van_filter = st.selectbox("Filter by van", van_options, format_func=van_label, key="admin_van_history_filter")
-        dfv = df_vans if van_filter == "All" else df_vans[df_vans["van"] == van_filter]
+            weekly_cutoff = datetime.now(TZ) - timedelta(days=7)
+            weekly_out = df_out_rows[df_out_rows["timestamp"] >= weekly_cutoff]
+            weekly_in = df_in_rows[df_in_rows["timestamp"] >= weekly_cutoff]
+            weekly_late = weekly_in["late"].astype(str).str.strip() != ""
+            weekly_summary = (
+                weekly_out.assign(date=weekly_out["timestamp"].dt.date)
+                .groupby("date")
+                .size()
+                .reset_index(name="signouts")
+            )
+            if not weekly_in.empty:
+                late_per_day = weekly_in.assign(is_late=weekly_late, date=weekly_in["timestamp"].dt.date)
+                late_per_day = late_per_day.groupby("date")["is_late"].sum().reset_index(name="late_returns")
+                weekly_summary = weekly_summary.merge(late_per_day, on="date", how="outer").fillna(0)
+            else:
+                weekly_summary["late_returns"] = 0
+            weekly_summary = weekly_summary.sort_values("date")
+            st.download_button(
+                "Download This Week's Summary (CSV)",
+                data=weekly_summary.to_csv(index=False),
+                file_name=f"{CAMP_CSV_PREFIX}_weekly_summary.csv",
+                mime="text/csv",
+            )
 
-        total_van_rows = len(dfv)
-        dfv = dfv.copy()
-        if "timestamp" in dfv.columns:
-            dfv["timestamp"] = _parse_ts(dfv["timestamp"])
-            dfv = dfv.sort_values("timestamp", na_position="first")
-            dfv["timestamp_str"] = dfv["timestamp"].apply(format_time)
+    with admin_section('Full Log History', 'History', open_=False):
+        if df_logs.empty:
+            st.info("No logs recorded yet.")
         else:
-            dfv["timestamp_str"] = ""
+            # Show only the most recent rows so this table stays fast no matter how
+            # large the live tab is. The complete record is always available through
+            # the full-history download and the archive tab.
 
-        if total_van_rows > HISTORY_TABLE_LIMIT:
-            dfv = dfv.tail(HISTORY_TABLE_LIMIT)
-            scope_label = "live" if van_filter == "All" else f"live {van_label(van_filter)}"
-            st.caption(f"Showing the most recent {HISTORY_TABLE_LIMIT} of {total_van_rows} {scope_label} rows. Use the download for the full record.")
-        elif van_filter != "All":
-            st.caption(f"{total_van_rows} row(s) for {van_label(van_filter)}.")
+            # Filtering BEFORE the row cap, not after, is the whole point: otherwise
+            # looking up one counselor's history (or every Night Off, to see who
+            # keeps coming back late) means scrolling through everyone else's most
+            # recent 200 rows hoping theirs are in there, or downloading the CSV
+            # and searching it by hand.
+            name_options = ["All"] + sorted(
+                n for n in df_logs["name"].astype(str).str.strip().unique() if n
+            )
+            reason_options = ["All"] + sorted(
+                r for r in df_logs["reason"].astype(str).str.strip().unique() if r
+            )
+            filt_col1, filt_col2 = st.columns(2)
+            with filt_col1:
+                name_filter = st.selectbox("Filter by name", name_options, key="admin_history_name_filter")
+            with filt_col2:
+                reason_filter = st.selectbox("Filter by reason", reason_options, key="admin_history_reason_filter")
+            df_scope = df_logs
+            if name_filter != "All":
+                df_scope = df_scope[df_scope["name"] == name_filter]
+            if reason_filter != "All":
+                df_scope = df_scope[df_scope["reason"] == reason_filter]
 
-        dfv = dfv.rename(columns={
-            "id": "ID",
-            "timestamp_str": "Time",
-            "van": "Van",
-            "driver": "Driver",
-            "purpose": "Purpose",
-            "passengers": "Passengers",
-            "other_purpose": "Other Purpose",
-            "action": "Action",
-            "status": "Status",
-            "gas_left": "Gas Left",
-        })
-        cols = [c for c in ["ID", "Time", "Van", "Driver", "Purpose", "Passengers", "Other Purpose", "Action", "Status", "Gas Left"] if c in dfv.columns]
-        st.dataframe(dfv[cols], use_container_width=True)
+            total_rows = len(df_scope)
+            df_display = df_scope.copy()
+            df_display["_ts"] = _parse_ts(df_display["timestamp"], format="mixed")
+            df_display = df_display.sort_values("_ts", na_position="first").drop(columns=["_ts"])
+            scope_bits = [b for b in (name_filter, reason_filter) if b != "All"]
+            scope_desc = " + ".join(scope_bits)
+            if total_rows > HISTORY_TABLE_LIMIT:
+                df_display = df_display.tail(HISTORY_TABLE_LIMIT)
+                scope_label = f"live {scope_desc}" if scope_desc else "live"
+                st.caption(f"Showing the most recent {HISTORY_TABLE_LIMIT} of {total_rows} {scope_label} rows. Use the downloads for the full record.")
+            elif scope_desc:
+                st.caption(f"{total_rows} row(s) for {scope_desc}.")
+            df_display["timestamp_str"] = df_display["timestamp"].apply(format_time)
+            df_display = df_display.rename(columns={
+                "id": "ID",
+                "timestamp_str": "Time",
+                "name": "Name",
+                "reason": "Reason",
+                "other_reason": "Other Details",
+                "action": "Action",
+                "status": "Status",
+                "late": "Late",
+            })
+            cols_show = ["ID", "Time", "Name", "Reason", "Other Details", "Action", "Status", "Late"]
+            for c in cols_show:
+                if c not in df_display.columns:
+                    df_display[c] = ""
+            df_display = df_display[cols_show]
+            st.dataframe(df_display, use_container_width=True)
 
-        st.download_button(
-            "Download Van Log as CSV",
-            data=dfv[cols].to_csv(index=False),
-            file_name="van_log.csv",
-            mime="text/csv",
-        )
+            st.download_button(
+                "Download Full Log as CSV",
+                data=df_display.to_csv(index=False),
+                file_name="signout_log.csv",
+                mime="text/csv",
+            )
 
-    st.markdown("---")
-    section_title("Delete Specific Log Entries (for testing / pre-season only)")
+    with admin_section('Van Log History', 'History', open_=False):
+        df_vans = load_vans_df_cached()
+        if df_vans is None or df_vans.empty:
+            st.info("No van logs recorded yet.")
+        else:
+            # Same reasoning as Full Log History above: filter by van BEFORE the
+            # row cap, so a specific van's trips aren't buried under the other
+            # two vans' most recent rows, and cap the table so it stays fast no
+            # matter how large the live tab is.
+            van_options = ["All"] + VANS
+            van_filter = st.selectbox("Filter by van", van_options, format_func=van_label, key="admin_van_history_filter")
+            dfv = df_vans if van_filter == "All" else df_vans[df_vans["van"] == van_filter]
 
-    if df_logs.empty:
-        st.info("No deletable entries.")
-    else:
-        id_to_label = {}
-        for _, row in df_logs.iterrows():
-            rid = str(row.get("id", "")).strip()
-            if not rid:
-                continue
-            label = f"{rid} – {row.get('name','')} – {format_time(row.get('timestamp'))} – {row.get('action','')}"
-            id_to_label[rid] = label
+            total_van_rows = len(dfv)
+            dfv = dfv.copy()
+            if "timestamp" in dfv.columns:
+                dfv["timestamp"] = _parse_ts(dfv["timestamp"])
+                dfv = dfv.sort_values("timestamp", na_position="first")
+                dfv["timestamp_str"] = dfv["timestamp"].apply(format_time)
+            else:
+                dfv["timestamp_str"] = ""
 
-        selected_labels = st.multiselect(
-            "Select entries to delete",
-            list(id_to_label.values()),
-            key="admin_delete_specific_multiselect",
-        )
+            if total_van_rows > HISTORY_TABLE_LIMIT:
+                dfv = dfv.tail(HISTORY_TABLE_LIMIT)
+                scope_label = "live" if van_filter == "All" else f"live {van_label(van_filter)}"
+                st.caption(f"Showing the most recent {HISTORY_TABLE_LIMIT} of {total_van_rows} {scope_label} rows. Use the download for the full record.")
+            elif van_filter != "All":
+                st.caption(f"{total_van_rows} row(s) for {van_label(van_filter)}.")
 
-        selected_ids = [log_id for log_id, label in id_to_label.items() if label in selected_labels]
+            dfv = dfv.rename(columns={
+                "id": "ID",
+                "timestamp_str": "Time",
+                "van": "Van",
+                "driver": "Driver",
+                "purpose": "Purpose",
+                "passengers": "Passengers",
+                "other_purpose": "Other Purpose",
+                "action": "Action",
+                "status": "Status",
+                "gas_left": "Gas Left",
+            })
+            cols = [c for c in ["ID", "Time", "Van", "Driver", "Purpose", "Passengers", "Other Purpose", "Action", "Status", "Gas Left"] if c in dfv.columns]
+            st.dataframe(dfv[cols], use_container_width=True)
 
-        if selected_ids and st.button("Delete Selected Entries", key="admin_delete_specific_button"):
-            delete_logs_by_ids(selected_ids)
-            log_audit_event("(admin area, password gate only)", "Deleted specific logs", f"{len(selected_ids)} row(s): {', '.join(selected_ids)}")
-            st.success(f"Deleted {len(selected_ids)} log(s).")
+            st.download_button(
+                "Download Van Log as CSV",
+                data=dfv[cols].to_csv(index=False),
+                file_name="van_log.csv",
+                mime="text/csv",
+            )
+
+    with admin_section('Delete Specific Log Entries (for testing / pre-season only)', 'Setup', open_=False):
+        if df_logs.empty:
+            st.info("No deletable entries.")
+        else:
+            id_to_label = {}
+            for _, row in df_logs.iterrows():
+                rid = str(row.get("id", "")).strip()
+                if not rid:
+                    continue
+                label = f"{rid} – {row.get('name','')} – {format_time(row.get('timestamp'))} – {row.get('action','')}"
+                id_to_label[rid] = label
+
+            selected_labels = st.multiselect(
+                "Select entries to delete",
+                list(id_to_label.values()),
+                key="admin_delete_specific_multiselect",
+            )
+
+            selected_ids = [log_id for log_id, label in id_to_label.items() if label in selected_labels]
+
+            if selected_ids and st.button("Delete Selected Entries", key="admin_delete_specific_button"):
+                delete_logs_by_ids(selected_ids)
+                log_audit_event("(admin area, password gate only)", "Deleted specific logs", f"{len(selected_ids)} row(s): {', '.join(selected_ids)}")
+                st.success(f"Deleted {len(selected_ids)} log(s).")
+                st.rerun()
+
+    with admin_section('Delete ALL Logs (for testing / pre-season only)', 'Setup', open_=False, divider=False):
+        st.error("WARNING: This will delete ALL sign-in/out records from Google Sheets.")
+
+        confirm_all = st.checkbox("I understand this will permanently delete all logs.", key="admin_confirm_delete_all_logs")
+        if confirm_all and st.button("Delete ALL Logs", key="admin_delete_all_logs_button"):
+            clear_all_logs()
+            log_audit_event("(admin area, password gate only)", "Deleted ALL logs")
+            st.success("All logs cleared.")
             st.rerun()
 
-    st.markdown("---")
-    section_title("Delete ALL Logs (for testing / pre-season only)")
-    st.error("WARNING: This will delete ALL sign-in/out records from Google Sheets.")
-
-    confirm_all = st.checkbox("I understand this will permanently delete all logs.", key="admin_confirm_delete_all_logs")
-    if confirm_all and st.button("Delete ALL Logs", key="admin_delete_all_logs_button"):
-        clear_all_logs()
-        log_audit_event("(admin area, password gate only)", "Deleted ALL logs")
-        st.success("All logs cleared.")
-        st.rerun()
-
+    if CFG.staff_directory:
+        with admin_section("Staff Directory", "People"):
+            render_staff_directory()
+    if CFG.driver_cert_tracking:
+        with admin_section("Driver Certifications", "People"):
+            render_driver_certifications()
+    if CFG.downtime_sheet:
+        with admin_section("Paper Sheet for Downtime", "Setup"):
+            render_downtime_sheet()
     crest_footer()
 
 # =================================================
