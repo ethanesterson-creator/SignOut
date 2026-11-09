@@ -4854,6 +4854,42 @@ def ensure_headers_once():
         pass
 
 
+def _missing_core_tabs() -> list:
+    """The tabs the app cannot run without (staff, logs) that this Sheet lacks.
+    Empty if both exist, or if the Sheet cannot be read right now (so a Google
+    hiccup is never mistaken for a brand-new camp)."""
+    try:
+        titles = {ws.title for ws in get_spreadsheet().worksheets()}
+    except Exception:
+        return []
+    return [t for t in (SHEET_STAFF, SHEET_LOGS) if t not in titles]
+
+
+def render_first_run_setup(missing: list):
+    """Shown instead of the kiosk when a Sheet has no staff or logs tab yet, so a
+    brand-new camp can create its tabs without the Admin page (which needs them)."""
+    page_title("First-time setup", CAMP_NAME)
+    st.write(
+        f"This camp's Google Sheet is still blank. It is missing: {', '.join(missing)}. "
+        "One click creates every tab the app needs, with the right headings. It only adds "
+        "tabs that are missing and never changes one that already exists."
+    )
+    if st.button("Create the tabs", key="first_run_create_tabs"):
+        try:
+            with st.spinner("Creating the tabs..."):
+                created = bootstrap_new_camp_sheets()
+            try:
+                get_worksheet.clear()
+            except Exception:
+                pass
+            st.session_state["sheet_checked"] = True
+            st.success(f"Created: {', '.join(created) if created else 'nothing was missing'}. Reload this page.")
+        except Exception:
+            st.error("Could not create the tabs right now. Check that the Sheet is shared with the app's Google account as an Editor.")
+    st.caption("After this, add the staff list to the staff tab, then reload.")
+    crest_footer()
+
+
 def _main_body():
     st.set_page_config(
         page_title=f"{CAMP_NAME} Staff Sign-Out",
@@ -4862,6 +4898,12 @@ def _main_body():
     )
     inject_css()
     kiosk_clock()
+    if not st.session_state.get("sheet_checked"):
+        missing_tabs = _missing_core_tabs()
+        if missing_tabs:
+            render_first_run_setup(missing_tabs)
+            st.stop()
+        st.session_state["sheet_checked"] = True
     ensure_headers_once()
     livecache.prewarm()  # first load of every sheet at once, not one by one
     if livecache.once("opswatch"):
