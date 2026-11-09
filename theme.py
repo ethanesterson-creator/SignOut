@@ -14,6 +14,41 @@ RED = "#E5213F"
 GOLD = "#F2B705"
 GOLD_INK = "#3D2C00"
 SKY = "#5C86C8"
+SKY_DEFAULT = SKY
+
+
+# ---------------------------------------------------------------- camp accent
+def _rgb(hex_color: str):
+    h = hex_color.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _mix(rgb, other, t):
+    return tuple(round(a + (b - a) * t) for a, b in zip(rgb, other))
+
+
+def set_accent(accent: str = ""):
+    """Use a camp's accent colour for the flags and bunting. Empty keeps the default."""
+    global SKY
+    SKY = accent if accent else SKY_DEFAULT
+
+
+def branded_css(accent: str = "") -> str:
+    """APP_CSS with the camp's accent in place of the default sky blue.
+
+    Only the blue glows and highlights change. Navy stays the atmosphere, and red
+    and gold stay reserved for late and no-sign-in, so status never depends on
+    a camp's brand. An empty accent returns the stylesheet untouched.
+    """
+    if not accent:
+        return APP_CSS
+    base = _rgb(accent)
+    lighter = _mix(base, (255, 255, 255), 0.18)
+    darker = _mix(base, (10, 24, 48), 0.22)
+    css = APP_CSS
+    for old, new in (("rgba(92,134,200,", base), ("rgba(120,160,230,", lighter), ("rgba(76,118,196,", darker)):
+        css = css.replace(old, "rgba(%d,%d,%d," % new)
+    return css
 
 
 # ---------------------------------------------------------------- flags

@@ -110,6 +110,9 @@ class CampConfig:
     board_reason_filter: bool = False     # True: Who's Out gets a filter by reason (for example Night Off)
     staff_directory: bool = False         # True: Admin gets a staff search with phone, email and other info
 
+    # look: the accent colour that replaces the default sky blue (a #RRGGBB hex). Empty = the default look.
+    brand_accent: str = ""
+
     # drivers and downtime
     driver_cert_tracking: bool = False    # True: drivers carry certified_on / expires_on; expired drivers cannot take a van
     driver_cert_warn_days: int = 30       # flag a certification this many days before it expires
@@ -169,6 +172,16 @@ def _as_bool(secrets, key, default):
     if word in ("false", "no", "0", "off", ""):
         return False
     raise ConfigError(f"'{key}' must be true or false, got {raw!r}.")
+
+
+def _as_hex(secrets, key, default) -> str:
+    raw = str(_get(secrets, key, default) or "").strip()
+    if not raw:
+        return ""
+    body = raw[1:] if raw.startswith("#") else raw
+    if len(body) != 6 or any(c not in "0123456789abcdefABCDEF" for c in body):
+        raise ConfigError(f"'{key}' must be a colour like #3EA5D8, got {raw!r}.")
+    return "#" + body.upper()
 
 
 def _as_email_list(secrets, key) -> tuple:
@@ -290,6 +303,7 @@ def load(secrets) -> CampConfig:
         due_soon_minutes=_as_int(secrets, "due_soon_minutes", d.due_soon_minutes, 0, 120),
         board_reason_filter=_as_bool(secrets, "board_reason_filter", d.board_reason_filter),
         staff_directory=_as_bool(secrets, "staff_directory", d.staff_directory),
+        brand_accent=_as_hex(secrets, "brand_accent", d.brand_accent),
         driver_cert_tracking=_as_bool(secrets, "driver_cert_tracking", d.driver_cert_tracking),
         driver_cert_warn_days=_as_int(secrets, "driver_cert_warn_days", d.driver_cert_warn_days, 1, 365),
         downtime_sheet=_as_bool(secrets, "downtime_sheet", d.downtime_sheet),

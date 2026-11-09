@@ -168,6 +168,26 @@ def test_cert_status_boundaries():
     assert on.driver_cert_tracking and on.downtime_sheet and on.driver_cert_warn_days == 45
 
 
+def test_brand_accent_setting_and_css():
+    import theme
+    assert cc.load({}).brand_accent == ""
+    assert cc.load({"brand_accent": "3ea5d8"}).brand_accent == "#3EA5D8"
+    assert cc.load({"brand_accent": "#3EA5D8"}).brand_accent == "#3EA5D8"
+    for bad in ("blue", "#12345", "#GGGGGG"):
+        try:
+            cc.load({"brand_accent": bad})
+        except cc.ConfigError:
+            pass
+        else:
+            raise AssertionError(f"expected ConfigError for {bad!r}")
+    assert theme.branded_css("") == theme.APP_CSS                 # default look is untouched
+    css = theme.branded_css("#3EA5D8")
+    assert "rgba(92,134,200," not in css and "rgba(62,165,216," in css
+    assert css.count("{") == theme.APP_CSS.count("{")             # only colours changed
+    theme.set_accent("#3EA5D8"); assert theme.SKY == "#3EA5D8"
+    theme.set_accent(""); assert theme.SKY == theme.SKY_DEFAULT
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

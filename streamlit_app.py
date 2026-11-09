@@ -160,11 +160,13 @@ KIOSK_PAGES = {"Who's Out", "Vans"}
 # THEME / CSS
 # =================================================
 # The visual system (tokens, CSS, signal-flag SVGs) lives in theme.py.
-from theme import APP_CSS, SVG_DEFS, bunting, flag
+import theme
+from theme import SVG_DEFS, branded_css, bunting, flag
 
 
 def inject_css():
-    st.markdown(APP_CSS + SVG_DEFS, unsafe_allow_html=True)
+    theme.set_accent(CFG.brand_accent)
+    st.markdown(branded_css(CFG.brand_accent) + SVG_DEFS, unsafe_allow_html=True)
 
 
 def kiosk_clock():

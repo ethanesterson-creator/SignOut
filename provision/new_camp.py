@@ -154,7 +154,7 @@ def build_settings(intake: dict, sheet_id: str) -> dict:
               "auto_archive_hour", "archive_keep_days",
               "due_soon_minutes", "board_reason_filter", "staff_directory",
               "alert_email_to", "alert_email_from", "late_alerts_only",
-              "driver_cert_tracking", "driver_cert_warn_days", "downtime_sheet"):
+              "driver_cert_tracking", "driver_cert_warn_days", "downtime_sheet", "brand_accent"):
         if k in intake:
             s[k] = intake[k]
     return s
