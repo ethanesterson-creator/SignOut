@@ -30,6 +30,7 @@ def row(name, reason, when, rid, status="OUT"):
 class FakeStore:
     def __init__(self, rows, dedupe="", schedule=None):
         self.rows, self.dedupe, self.schedule, self.writes = rows, dedupe, schedule, []
+        self.dedupe_reads = 0
 
     def read_status(self):
         return self.rows
@@ -38,6 +39,7 @@ class FakeStore:
         return self.schedule
 
     def read_dedupe(self):
+        self.dedupe_reads += 1
         return self.dedupe
 
     def write_dedupe(self, v):
@@ -121,6 +123,20 @@ def test_worker_exits_with_the_disabled_code_when_the_camp_has_not_turned_it_on(
         with open(p, "w", encoding="utf-8") as f:
             f.write('camp_name = "Camp Test"' + chr(10) + 'spreadsheet_id = "X"' + chr(10))
         assert lw.main(p) == lw.DISABLED_EXIT
+
+
+def test_a_quiet_pass_never_reads_the_alerted_record_and_a_handled_person_is_read_once():
+    store = FakeStore([row("Ari", "Period Off", at(13, 21), "r1")], schedule=SCHEDULE)
+    run(store, at(13, 30))                                   # nobody late yet
+    assert store.dedupe_reads == 0
+    run(store, at(14, 0))                                    # Ari goes late: one read, one alert
+    assert store.dedupe_reads == 1
+    for minute in (1, 2, 3, 4):
+        run(store, at(14, minute))                           # still late, already handled
+    assert store.dedupe_reads == 1 and store.dedupe == "r1"
+    store.rows.append(row("Bo", "Period Off", at(13, 30), "r2"))
+    n, pushes, _ = run(store, at(14, 6))                     # a new late person is still caught
+    assert n == 1 and pushes[0][1].startswith("Bo is") and store.dedupe_reads == 2
 
 
 if __name__ == "__main__":

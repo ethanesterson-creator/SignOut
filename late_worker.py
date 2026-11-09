@@ -30,6 +30,7 @@ LATE_KEY = "late_alerted"
 TICK_SECONDS = 30
 HEARTBEAT_SECONDS = 120
 KEEP_ALERTED = 300
+SCHEDULE_CACHE_SECONDS = 300
 DISABLED_EXIT = 3
 
 
@@ -117,10 +118,23 @@ def newly_late(status_rows, already, now, cfg, tz, schedule):
 
 
 def run_once(store, cfg, notify, send_email, now, tz):
-    """One pass: alert everyone newly late. Returns how many were alerted."""
+    """One pass: alert everyone newly late. Returns how many were alerted.
+
+    Google limits how often a camp's Sheet can be read, so a quiet pass costs one read
+    (who is out). The alerted-already record is only read when someone is late and this
+    process has not already dealt with them."""
     schedule = store.read_schedule() or default_schedule(cfg)
+    known = getattr(store, "known", None)
+    if known is None:
+        known = store.known = set()
+    candidates = newly_late(store.read_status(), known, now, cfg, tz, schedule)
+    if not candidates:
+        return 0
     already_list = [x for x in store.read_dedupe().split(",") if x]
-    late = newly_late(store.read_status(), set(already_list), now, cfg, tz, schedule)
+    already = set(already_list)
+    known.update(i for i in already)
+    late = [p for p in candidates if p["id"] not in already]
+    known.update(p["id"] for p in candidates)
     for p in late:
         notify(f"{cfg.notify_prefix}: LATE", f"{p['name']} is {p['mins']} min late ({p['reason']})")
         subject, body = emailalert.late_message(cfg.name, p["name"], p["mins"], p["reason"], due_text(p["due"], now))
@@ -146,12 +160,18 @@ class SheetStore:
         )
         self.sheet = gspread.authorize(creds).open_by_key(secrets["spreadsheet_id"])
         self._settings = None
+        self._schedule, self._schedule_at = None, 0.0
+        self.known = set()
 
     def read_status(self):
         return self.sheet.worksheet("current_status").get_all_records()
 
     def read_schedule(self):
-        return schedule_from_rows(self.sheet.worksheet("schedule").get_all_values())
+        # The schedule rarely changes, so read it at most every five minutes.
+        if self._schedule is None or time.time() - self._schedule_at > SCHEDULE_CACHE_SECONDS:
+            self._schedule = schedule_from_rows(self.sheet.worksheet("schedule").get_all_values())
+            self._schedule_at = time.time()
+        return self._schedule
 
     def _settings_ws(self):
         if self._settings is None:
