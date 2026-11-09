@@ -16,6 +16,7 @@ from gspread.exceptions import APIError, GSpreadException, WorksheetNotFound
 from google.oauth2.service_account import Credentials
 
 import camp_config
+import emailalert
 import livecache
 import opswatch
 import ratelimit
@@ -963,6 +964,15 @@ def check_late_and_alert(df_out: pd.DataFrame):
                     f"{CAMP_NOTIFY_PREFIX}: LATE",
                     f"{row.get('name','')} is {mins} min late ({row.get('reason','')})",
                 )
+                try:
+                    due = effective_due_back(row.get("reason", ""), row.get("timestamp", ""))
+                    subject, body = emailalert.late_message(
+                        CAMP_NAME, str(row.get("name", "")), mins, str(row.get("reason", "")),
+                        format_board_time(due) if due is not None else "",
+                    )
+                    send_alert_email(subject, body)
+                except Exception:
+                    pass
                 new_alerts.append(rid)
 
         if new_alerts:
@@ -992,6 +1002,8 @@ def check_nightly_summary(df_out: pd.DataFrame):
     to call from any board tick. Never breaks the board on failure.
     """
     try:
+        if CFG.late_alerts_only:
+            return
         now = datetime.now(TZ)
         if now.hour < NIGHTLY_SUMMARY_HOUR:
             return
@@ -1328,6 +1340,18 @@ def notify_phone(title: str, message: str):
     _ntfy_send(st.secrets.get("ntfy_topic", ""), title, message)
 
 
+def send_alert_email(subject: str, text: str):
+    """Email the camp's alert recipients (late, and late person back). Does nothing
+    unless the camp has recipients, a sender and a Resend key. Never raises."""
+    try:
+        to = list(CFG.alert_email_to)
+        key = str(st.secrets.get("resend_api_key", "") or "")
+        if to and key and CFG.alert_email_from:
+            emailalert.send(key, CFG.alert_email_from, to, subject, text)
+    except Exception:
+        pass
+
+
 def notify_vans(title: str, message: str):
     """Push van events to the vans phone.
 
@@ -1335,6 +1359,8 @@ def notify_vans(title: str, message: str):
     than staff sign-outs. Falls back to the main topic if the vans topic is
     not configured, so van alerts never silently vanish.
     """
+    if CFG.late_alerts_only:
+        return
     topic = st.secrets.get("ntfy_topic_vans", "") or st.secrets.get("ntfy_topic", "")
     _ntfy_send(topic, title, message)
 
@@ -1404,12 +1430,24 @@ def append_log_row(name: str, reason: str, other_reason: str, action: str, statu
     _queue_log_rows([row_dict])
 
     # Sign-out shows the reason; the typed detail wins when the reason is Other.
-    if notify:
+    if notify and not CFG.late_alerts_only:
         if action == "OUT":
             detail = other_reason.strip() if (reason.startswith("Other") and other_reason.strip()) else reason
             notify_phone(f"{CAMP_NOTIFY_PREFIX}: Signed OUT", f"{name}: {detail}")
         else:
             notify_phone(f"{CAMP_NOTIFY_PREFIX}: Signed IN", name)
+
+    # A late person coming back is worth its own message, because the earlier
+    # late alert said "you will hear when they are back". Only real lateness
+    # counts: the auto-close note for a forgotten sign-in is not a late return.
+    if action == "IN" and str(late or "").startswith("LATE"):
+        if CFG.late_alerts_only:  # otherwise the ordinary "Signed IN" push above already covered it
+            notify_phone(f"{CAMP_NOTIFY_PREFIX}: Back in", f"{name} is back ({late})")
+        try:
+            subject, body = emailalert.back_in_message(CAMP_NAME, name, late)
+            send_alert_email(subject, body)
+        except Exception:
+            pass
 
     # Handed back so the caller can offer an Undo on this exact row.
     return row_dict["id"]

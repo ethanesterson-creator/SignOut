@@ -136,7 +136,8 @@ def build_settings(intake: dict, sheet_id: str) -> dict:
         s["reasons"] = [dict(r) for r in intake["reasons"]]
     for k in ("forgot_threshold_minutes", "fork_no_deadline_hours", "nightly_summary_hour",
               "auto_archive_hour", "archive_keep_days",
-              "due_soon_minutes", "board_reason_filter", "staff_directory"):
+              "due_soon_minutes", "board_reason_filter", "staff_directory",
+              "alert_email_to", "alert_email_from", "late_alerts_only"):
         if k in intake:
             s[k] = intake[k]
     return s

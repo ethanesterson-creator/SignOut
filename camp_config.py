@@ -110,6 +110,11 @@ class CampConfig:
     board_reason_filter: bool = False     # True: Who's Out gets a filter by reason (for example Night Off)
     staff_directory: bool = False         # True: Admin gets a staff search with phone, email and other info
 
+    # alert emails (sent through Resend; the API key lives in secrets as resend_api_key, never here)
+    alert_email_to: tuple = ()            # who gets the late and "late person is back" emails; empty = no email
+    alert_email_from: str = ""            # e.g. "Headcount <alerts@headcountcamp.com>"
+    late_alerts_only: bool = False        # True: skip routine sign-out/in, van and nightly pushes. Late, back-in and emergency stay.
+
     # operator alerts (see opswatch.py): a private ntfy topic that only the person
     # running the app subscribes to. Empty = no operator alerts.
     ops_topic: str = ""
@@ -159,6 +164,22 @@ def _as_bool(secrets, key, default):
     if word in ("false", "no", "0", "off", ""):
         return False
     raise ConfigError(f"'{key}' must be true or false, got {raw!r}.")
+
+
+def _as_email_list(secrets, key) -> tuple:
+    """A list (or comma-separated string) of email addresses. Each must look like one."""
+    raw = _get(secrets, key, ())
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    out = []
+    for item in raw or ():
+        addr = str(item).strip()
+        if not addr:
+            continue
+        if addr.count("@") != 1 or " " in addr or "." not in addr.split("@")[1] or addr.startswith("@"):
+            raise ConfigError(f"'{key}' has an invalid email address: {addr!r}.")
+        out.append(addr)
+    return tuple(out)
 
 
 def _parse_reason(item, index: int) -> Reason:
@@ -264,6 +285,9 @@ def load(secrets) -> CampConfig:
         due_soon_minutes=_as_int(secrets, "due_soon_minutes", d.due_soon_minutes, 0, 120),
         board_reason_filter=_as_bool(secrets, "board_reason_filter", d.board_reason_filter),
         staff_directory=_as_bool(secrets, "staff_directory", d.staff_directory),
+        alert_email_to=_as_email_list(secrets, "alert_email_to"),
+        alert_email_from=str(_get(secrets, "alert_email_from", d.alert_email_from)).strip(),
+        late_alerts_only=_as_bool(secrets, "late_alerts_only", d.late_alerts_only),
         ops_topic=str(_get(secrets, "ops_ntfy_topic", d.ops_topic)).strip(),
         ops_server=str(_get(secrets, "ops_ntfy_server", d.ops_server)).strip() or d.ops_server,
     )
