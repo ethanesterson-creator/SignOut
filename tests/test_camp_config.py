@@ -127,6 +127,33 @@ def test_bad_settings_give_clear_errors():
             raise AssertionError(f"expected ConfigError for {extra}")
 
 
+def test_board_extras_are_off_by_default_and_settable():
+    d = cc.load({})
+    assert d.due_soon_minutes == 0 and d.board_reason_filter is False and d.staff_directory is False
+    on = cc.load({"due_soon_minutes": 15, "board_reason_filter": True, "staff_directory": "true"})
+    assert on.due_soon_minutes == 15 and on.board_reason_filter is True and on.staff_directory is True
+    for bad in ({"due_soon_minutes": 500}, {"board_reason_filter": "maybe"}):
+        try:
+            cc.load(bad)
+        except cc.ConfigError:
+            pass
+        else:
+            raise AssertionError(f"expected ConfigError for {bad}")
+
+
+def test_minutes_until_due_window():
+    now = TZ.localize(datetime(2026, 7, 10, 20, 0, 0))
+    due = now + timedelta(minutes=12, seconds=10)
+    assert cc.minutes_until_due(due, now, 15) == 13          # rounds up, inside the window
+    assert cc.minutes_until_due(due, now, 10) is None        # outside the window
+    assert cc.minutes_until_due(due, now, 0) is None         # feature off
+    assert cc.minutes_until_due(None, now, 15) is None       # no deadline, no warning
+    assert cc.minutes_until_due(now - timedelta(minutes=1), now, 15) is None   # already late
+    assert cc.minutes_until_due(now, now, 15) is None        # exactly due is not "soon"
+    naive_due = datetime(2026, 7, 10, 20, 5)
+    assert cc.minutes_until_due(naive_due, now, 15) is None  # naive/aware mix: say nothing
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

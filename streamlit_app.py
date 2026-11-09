@@ -2810,6 +2810,18 @@ def clean_other_reason(other_reason: str) -> str:
     return s
 
 
+def _soon_minutes(row):
+    """Minutes until this person is late, if they are inside the camp's warning
+    window (a camp setting; off by default). None otherwise."""
+    if not CFG.due_soon_minutes:
+        return None
+    due = effective_due_back(row.get("reason", ""), row.get("timestamp", ""))
+    try:
+        return camp_config.minutes_until_due(due, datetime.now(TZ), CFG.due_soon_minutes)
+    except Exception:
+        return None
+
+
 def render_out_cards(df_out: pd.DataFrame, forgot_zone: bool = False):
     """The muster board: one row per person, most urgent first.
 
@@ -2824,7 +2836,8 @@ def render_out_cards(df_out: pd.DataFrame, forgot_zone: bool = False):
     if forgot_zone:
         entries.sort(key=lambda e: str(e[1].get("timestamp", "")))
     else:
-        entries.sort(key=lambda e: (-max(e[0], 0), str(e[1].get("timestamp", ""))))
+        # Late first, then people about to be late, then everyone else.
+        entries.sort(key=lambda e: (-max(e[0], 0), 0 if _soon_minutes(e[1]) else 1, str(e[1].get("timestamp", ""))))
 
     rows = []
     for mins, row in entries:
@@ -2843,6 +2856,12 @@ def render_out_cards(df_out: pd.DataFrame, forgot_zone: bool = False):
         elif mins > 0:
             kind, cls = "late", "sg-late"
             status = f"<span class='sg-badge'>Late {mins} min</span>"
+        elif _soon_minutes(row):
+            kind, cls = "soon", "sg-soon"
+            status = (
+                f"<span class='sg-badge'>Due in {_soon_minutes(row)} min</span>"
+                f"<div class='sg-detail'>back by {due_txt}</div>"
+            )
         else:
             kind, cls = "out", ""
             status = (
@@ -3305,6 +3324,17 @@ def whos_out_empty():
     )
 
 
+def _reason_filter_mask(reasons: pd.Series, picked: str) -> pd.Series:
+    """Which rows match the reason chosen in the Who's Out filter. 'Other' covers
+    the free-text reason and anything that is not one of the camp's named reasons
+    (for example a van trip)."""
+    r = reasons.astype(str).str.strip()
+    if picked == "Other":
+        named = {n for n in CFG.reason_names if n != camp_config.OTHER_REASON}
+        return ~r.isin(named)
+    return r == picked
+
+
 def page_whos_out():
     page_title(CFG.board_label, "Who's Out")
 
@@ -3336,7 +3366,29 @@ def page_whos_out():
             active = df_out[~forgot_mask]
             forgot = df_out[forgot_mask]
 
-            if active.empty:
+            # Optional filter by reason (a camp setting), so an administrator
+            # can see only the people out for, say, a night off.
+            picked = ""
+            if CFG.board_reason_filter:
+                picked = st.segmented_control(
+                    "Filter by reason",
+                    ["All"] + [r for r in CFG.reason_names if r != camp_config.OTHER_REASON] + ["Other"],
+                    default="All",
+                    key="board_reason_pick",
+                    label_visibility="collapsed",
+                ) or "All"
+                if picked != "All":
+                    keep = _reason_filter_mask(df_out["reason"], picked)
+                    active = active[keep.reindex(active.index, fill_value=False)]
+                    forgot = forgot[keep.reindex(forgot.index, fill_value=False)]
+
+            if active.empty and picked and picked != "All":
+                st.markdown(
+                    f"<div class='sg-empty'>{flag('in', 40)}<div>Nobody out for {esc(picked)}"
+                    "<span>Choose All to see everyone.</span></div></div>",
+                    unsafe_allow_html=True,
+                )
+            elif active.empty:
                 whos_out_empty()
             else:
                 render_out_cards(active)
@@ -3806,6 +3858,92 @@ def page_group_signout(staff_pins: dict, staff_names: list):
     crest_footer()
 
 
+# Columns the app itself owns. Everything else in the staff tab (phone, email,
+# cabin, emergency contact...) is the camp's own and shows in the directory.
+_STAFF_RESERVED_COLUMNS = {"name", "pin", "active", "admin"}
+
+
+def render_staff_directory():
+    """Admin: search staff by name, tap a name, see their info. Never shows codes."""
+    section_title("Staff Directory")
+    st.caption(
+        "Search by name, then tap a name to see their details. Phone numbers, emails and "
+        "anything else live in extra columns on the staff tab of your Google Sheet."
+    )
+    try:
+        staff_df = load_staff_df_cached()
+        drivers_df = load_drivers_df_cached()
+    except Exception:
+        st.error("Could not load the staff list right now. Please try again.")
+        return
+
+    query = st.text_input("Search staff by name", key="staff_dir_query", placeholder="Start typing a name").strip()
+    if not query:
+        st.caption("Type part of a name to search.")
+        return
+
+    names = staff_df["name"].astype(str)
+    matches = staff_df[names.str.contains(query, case=False, regex=False, na=False)].sort_values("name")
+    if matches.empty:
+        st.info("Nobody matches that search.")
+        return
+
+    shown = matches.head(12)
+    if len(matches) > len(shown):
+        st.caption(f"Showing the first {len(shown)} of {len(matches)} matches. Type more of the name to narrow it.")
+
+    per_row = 3
+    rows = list(shown["name"])
+    for i in range(0, len(rows), per_row):
+        cols = st.columns(per_row)
+        for col, nm in zip(cols, rows[i:i + per_row]):
+            if col.button(nm, key=f"staff_dir_pick_{nm}", use_container_width=True):
+                st.session_state["staff_dir_selected"] = nm
+
+    picked = st.session_state.get("staff_dir_selected", "")
+    if picked not in set(shown["name"]):
+        if len(shown) == 1:
+            picked = shown.iloc[0]["name"]
+        else:
+            return
+    person = staff_df[staff_df["name"] == picked].iloc[0]
+
+    approved = set(drivers_df.loc[drivers_df["passed_test"], "name"]) if not drivers_df.empty else set()
+    facts = [
+        ("Status", "Active" if bool(person.get("active", True)) else "Inactive"),
+        ("Role", "Office / admin" if bool(person.get("admin", False)) else "Staff"),
+        ("Cleared to drive", "Yes" if picked in approved else "No"),
+    ]
+    for col in staff_df.columns:
+        if col in _STAFF_RESERVED_COLUMNS:
+            continue
+        val = str(person.get(col, "") or "").strip()
+        if val:
+            facts.append((col.replace("_", " ").title(), val))
+
+    def _fmt(label, val):
+        v = esc(val)
+        if label.lower() in ("phone", "cell", "mobile") and any(ch.isdigit() for ch in val):
+            digits = "".join(ch for ch in val if ch.isdigit() or ch == "+")
+            return f"<a href='tel:{esc(digits)}'>{v}</a>"
+        if "@" in val and " " not in val and label.lower() in ("email", "e-mail"):
+            return f"<a href='mailto:{v}'>{v}</a>"
+        return v
+
+    lines = "".join(
+        f"<div style='display:flex;gap:14px;padding:5px 0;border-top:1px solid var(--line)'>"
+        f"<div style='width:150px;color:var(--ink-3)'>{esc(label)}</div>"
+        f"<div style='color:var(--ink);font-weight:600'>{_fmt(label, val)}</div></div>"
+        for label, val in facts
+    )
+    st.markdown(
+        f"<div class='sg-note'><div style='font-family:var(--font-display);font-size:1.7rem;"
+        f"font-weight:800;text-transform:uppercase;margin-bottom:6px'>{esc(picked)}</div>{lines}</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("---")
+
+
 def page_admin_history(staff_pins: dict):
     page_title("Office Use Only", "Admin / History")
     ADMIN_PASSWORD = st.secrets.get("admin_password", "")
@@ -4193,6 +4331,9 @@ def page_admin_history(staff_pins: dict):
             st.error("Could not rebuild the status cache right now. Please try again.")
 
     st.markdown("---")
+
+    if CFG.staff_directory:
+        render_staff_directory()
 
     # -------------------------------------------------
     # PIN SECURITY: one-way migration from plaintext to hashed PINs

@@ -31,6 +31,12 @@ def _shape(kind: str):
             f"<polygon points='14,4.67 48,16 14,27.33' fill='{RED}'/>",
             "<polygon points='0,0 48,16 0,32'/>",
         )
+    if kind == "soon":  # due-soon warning: navy field, gold pennant
+        return (
+            f"<rect width='48' height='32' fill='{NAVY}'/>"
+            f"<polygon points='0,4 48,16 0,28' fill='{GOLD}'/>",
+            "<rect width='48' height='32'/>",
+        )
     if kind == "forgot":  # split square, gold over white
         return (
             f"<rect width='48' height='32' fill='{WHITE}'/>"
@@ -54,7 +60,7 @@ _flag_seq = [0]
 
 
 def flag(kind: str, height: int = 28, label: str = "", wave: bool = False) -> str:
-    """Inline SVG signal flag. kind: in | out | late | forgot | emergency.
+    """Inline SVG signal flag. kind: in | out | soon | late | forgot | emergency.
 
     Shapes differ on purpose (plain, inset square, pennant, split square) so
     status never depends on colour alone. wave=True renders real rippling cloth:
@@ -457,6 +463,10 @@ div[data-testid="stExpander"] summary p { font-weight: 600; font-size: 1rem; col
 .sg-row.sg-late .sg-name { font-size: 2.5rem; }
 .sg-row.sg-late .sg-badge { background: var(--red); border-color: #ff6b81; font-size: 1.5rem; padding: 6px 16px; animation: sgBeat 2.4s ease-in-out infinite; box-shadow: 0 10px 30px -8px rgba(229,33,63,0.9); }
 @keyframes sgBeat { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+/* due soon: amber row and badge, quieter than late, louder than a normal row */
+.sg-row.sg-soon { background: linear-gradient(90deg, rgba(242,183,5,0.22), rgba(242,183,5,0.07)); border-color: rgba(242,183,5,0.7); }
+.sg-row.sg-soon .sg-name { font-size: 2.1rem; }
+.sg-row.sg-soon .sg-badge { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); font-size: 1.25rem; }
 .sg-row.sg-forgot { padding-top: var(--s-2); padding-bottom: var(--s-2); background: linear-gradient(90deg, rgba(242,183,5,0.16), rgba(242,183,5,0.05)); border-color: rgba(242,183,5,0.5); }
 .sg-row.sg-forgot .sg-name { font-size: 1.4rem; }
 .sg-row.sg-forgot .sg-time { font-size: 0.9rem; }

@@ -105,6 +105,11 @@ class CampConfig:
     auto_archive_hour: int = 3            # hour (0-23) old logs are archived
     archive_keep_days: int = 3
 
+    # board extras, all OFF by default so existing camps look exactly as before
+    due_soon_minutes: int = 0             # >0: a person turns yellow this many minutes before they are late
+    board_reason_filter: bool = False     # True: Who's Out gets a filter by reason (for example Night Off)
+    staff_directory: bool = False         # True: Admin gets a staff search with phone, email and other info
+
     # operator alerts (see opswatch.py): a private ntfy topic that only the person
     # running the app subscribes to. Empty = no operator alerts.
     ops_topic: str = ""
@@ -142,6 +147,18 @@ def _as_int(secrets, key, default, lo, hi):
     if not lo <= val <= hi:
         raise ConfigError(f"'{key}' must be between {lo} and {hi}, got {val}.")
     return val
+
+
+def _as_bool(secrets, key, default):
+    raw = _get(secrets, key, default)
+    if isinstance(raw, bool):
+        return raw
+    word = str(raw).strip().lower()
+    if word in ("true", "yes", "1", "on"):
+        return True
+    if word in ("false", "no", "0", "off", ""):
+        return False
+    raise ConfigError(f"'{key}' must be true or false, got {raw!r}.")
 
 
 def _parse_reason(item, index: int) -> Reason:
@@ -244,6 +261,9 @@ def load(secrets) -> CampConfig:
         nightly_summary_hour=_as_int(secrets, "nightly_summary_hour", d.nightly_summary_hour, 0, 23),
         auto_archive_hour=_as_int(secrets, "auto_archive_hour", d.auto_archive_hour, 0, 23),
         archive_keep_days=_as_int(secrets, "archive_keep_days", d.archive_keep_days, 1, 60),
+        due_soon_minutes=_as_int(secrets, "due_soon_minutes", d.due_soon_minutes, 0, 120),
+        board_reason_filter=_as_bool(secrets, "board_reason_filter", d.board_reason_filter),
+        staff_directory=_as_bool(secrets, "staff_directory", d.staff_directory),
         ops_topic=str(_get(secrets, "ops_ntfy_topic", d.ops_topic)).strip(),
         ops_server=str(_get(secrets, "ops_ntfy_server", d.ops_server)).strip() or d.ops_server,
     )
@@ -302,3 +322,20 @@ def due_back(cfg: CampConfig, reason: str, now, tz, schedule):
         return None  # signed out after the last period; no deadline to enforce
 
     return None
+
+
+def minutes_until_due(due, now, window: int):
+    """Whole minutes left (rounded up) if this person is inside the warning window,
+    otherwise None. 'Inside' means not late yet and no more than `window` minutes
+    from their deadline. A window of 0 turns the warning off. No deadline, no warning.
+    """
+    if not due or window <= 0:
+        return None
+    try:
+        remaining = (due - now).total_seconds()
+    except TypeError:
+        return None  # naive and aware mixed: say nothing rather than guess
+    if remaining <= 0:
+        return None
+    mins = int(-(-remaining // 60))  # ceiling
+    return mins if mins <= window else None
