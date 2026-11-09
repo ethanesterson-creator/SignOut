@@ -36,6 +36,9 @@ except camp_config.ConfigError as _cfg_err:
     st.stop()
 
 CAMP_NAME = CFG.name
+# Bar colour for the admin Analytics charts. They used NAVY, which this file never defined, so
+# Analytics raised NameError as soon as there was history to chart. Sky blue reads on the dark page.
+CHART_COLOR = "#5C86C8"
 CAMP_TAGLINE = CFG.tagline
 CAMP_LOGO_PATH = CFG.logo_path
 CAMP_NOTIFY_PREFIX = CFG.notify_prefix
@@ -4302,14 +4305,14 @@ def page_admin_history(staff_pins: dict):
             else:
                 daily_counts = recent_out.groupby(recent_out["timestamp"].dt.date).size()
                 daily_counts.index = daily_counts.index.astype(str)
-                st.bar_chart(daily_counts, color=NAVY)
+                st.bar_chart(daily_counts, color=CHART_COLOR)
         with col_b:
             st.caption("Top reasons (live tab)")
             reason_counts = df_out_rows["reason"].value_counts()
             if reason_counts.empty:
                 st.caption("No reasons recorded yet.")
             else:
-                st.bar_chart(reason_counts, color=NAVY)
+                st.bar_chart(reason_counts, color=CHART_COLOR)
 
         st.caption("Late-return rate by person (3+ trips, live tab)")
         late_by_name = (
@@ -4333,7 +4336,7 @@ def page_admin_history(staff_pins: dict):
             van_out_rows = df_vans_all[df_vans_all["action"].astype(str).str.upper() == "OUT"]
             if not van_out_rows.empty:
                 st.caption("Van trips by vehicle (live tab)")
-                st.bar_chart(van_out_rows["van"].value_counts(), color=NAVY)
+                st.bar_chart(van_out_rows["van"].value_counts(), color=CHART_COLOR)
 
         weekly_cutoff = datetime.now(TZ) - timedelta(days=7)
         weekly_out = df_out_rows[df_out_rows["timestamp"] >= weekly_cutoff]
