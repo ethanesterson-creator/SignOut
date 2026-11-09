@@ -3597,8 +3597,9 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
     van_nonce = st.session_state["van_form_nonce"]
 
     flash = st.session_state.pop("van_flash", "")
+    flash_dir = st.session_state.pop("van_flash_dir", "in")
     if flash:
-        big_flash(flash, "in")
+        big_flash(flash, flash_dir, word="VAN OUT" if flash_dir == "out" else "VAN BACK")
 
     # A van picked by someone who then walked away must not still be selected
     # when the next counselor arrives. The kiosk is one shared session, so the
@@ -3749,6 +3750,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 st.session_state["van_form_nonce"] += 1
                 st.session_state["van_selected"] = ""
                 st.session_state["van_flash"] = f"{van_label(selected)} is back. Gas: {gas_left}.{note}"
+                st.session_state["van_flash_dir"] = "in"
                 st.rerun()
 
             with st.spinner("One moment..."):
@@ -3845,6 +3847,7 @@ def page_vans(staff_pins: dict, staff_names: list, driver_names: list):
                 st.session_state["van_form_nonce"] += 1
                 st.session_state["van_selected"] = ""
                 st.session_state["van_flash"] = f"{van_label(selected)} is out under {driver}.{camp_note}"
+                st.session_state["van_flash_dir"] = "out"
                 st.rerun()
 
             with st.spinner("One moment..."):
@@ -3874,8 +3877,9 @@ def page_group_signout(staff_pins: dict, staff_names: list):
     g_nonce = st.session_state["group_form_nonce"]
 
     flash = st.session_state.pop("group_flash", "")
+    flash_dir = st.session_state.pop("group_flash_dir", "in")
     if flash:
-        big_flash(flash, "in")
+        big_flash(flash, flash_dir, word="GROUP OUT" if flash_dir == "out" else "GROUP BACK")
 
     pin_lookup = build_pin_lookup(staff_pins)
     leader = st.session_state.get("group_leader")
@@ -3923,6 +3927,7 @@ def page_group_signout(staff_pins: dict, staff_names: list):
                 f"{len(freed)} signed back in: {', '.join(freed)}" if freed
                 else "Nobody was still out under that trip."
             )
+            st.session_state["group_flash_dir"] = "in"
             st.rerun()
 
     # ---------------- TAKE THE GROUP OUT ----------------
@@ -3961,6 +3966,7 @@ def page_group_signout(staff_pins: dict, staff_names: list):
                     f"{len(signed)} signed out for {ptext}: {', '.join(signed)}" if signed
                     else "Everyone selected was already signed out."
                 )
+                st.session_state["group_flash_dir"] = "out"
                 st.rerun()
 
     crest_footer()
