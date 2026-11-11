@@ -1234,48 +1234,6 @@ def resolve_admin_code(code: str, staff_pins: dict):
     return name, None
 
 
-def count_unhashed_staff_pins() -> int:
-    """How many staff rows still have a plaintext pin, for the admin banner."""
-    staff_df = load_staff_df_cached()
-    pins = staff_df["pin"].astype(str)
-    return int((pins.str.strip() != "").sum() - pins.apply(is_hashed_pin).sum())
-
-
-def migrate_staff_pins_to_hashed() -> int:
-    """One-way: replace every plaintext pin in the staff sheet with its hash.
-
-    Rows already hashed, or blank, are left untouched, so this is safe to run
-    more than once. Written as a single batched update so a mid-write failure
-    can never leave the sheet in a state that isn't exactly "before" or
-    "after" for every row. Returns how many rows were changed.
-    """
-    sheet = get_worksheet(SHEET_STAFF)
-    values = sheet.get_all_values()
-    if not values:
-        return 0
-    headers = [str(h).strip().lower() for h in values[0]]
-    if "pin" not in headers:
-        return 0
-    col_idx = headers.index("pin")
-
-    new_col = []
-    changed = 0
-    for row in values[1:]:
-        cell = row[col_idx] if col_idx < len(row) else ""
-        raw = str(cell).strip()
-        if raw and not is_hashed_pin(raw):
-            new_col.append([hash_pin(raw)])
-            changed += 1
-        else:
-            new_col.append([cell])
-
-    if changed:
-        start = gspread.utils.rowcol_to_a1(2, col_idx + 1)
-        end = gspread.utils.rowcol_to_a1(len(values), col_idx + 1)
-        sheet.update(f"{start}:{end}", new_col)
-        load_staff_df_cached.clear()
-    return changed
-
 # =================================================
 # LOGS SHEET HELPERS
 # =================================================
@@ -4486,63 +4444,12 @@ def page_admin_history(staff_pins: dict):
                 st.error("Could not rebuild the status cache right now. Please try again.")
 
     # -------------------------------------------------
-    # PIN SECURITY: one-way migration from plaintext to hashed PINs
-    # -------------------------------------------------
-    with admin_section('Staff PIN Security', 'People', open_=False):
-        pin_flash = st.session_state.pop("pin_migrate_flash", "")
-        if pin_flash:
-            st.success(pin_flash)
-        pin_err = st.session_state.pop("pin_migrate_error", "")
-        if pin_err:
-            st.error(pin_err)
-
-        unhashed_count = count_unhashed_staff_pins()
-        if unhashed_count == 0:
-            st.caption(
-                "All staff PINs are already hashed. Nobody with read access to the "
-                "staff sheet can see anyone's actual code."
-            )
-        else:
-            st.warning(
-                f"{unhashed_count} staff PIN(s) are still stored as plain text in the staff "
-                "sheet — anyone with read access to that sheet can see them. Hashing replaces "
-                "each plaintext code with a one-way scramble; staff keep signing in with the "
-                "same code, but the sheet itself no longer reveals it. This cannot be undone "
-                "from within the app — keep a backup of the staff tab first if you ever want "
-                "the original codes recoverable."
-            )
-            with st.form("pin_migrate_form", clear_on_submit=True):
-                pin_migrate_code = code_box(
-                    "Your admin code", max_chars=4, key="pin_migrate_code"
-                )
-                pin_migrate_confirm = st.checkbox(
-                    "I understand this is permanent and I have a backup if I want one."
-                )
-                pin_migrate_go = st.form_submit_button("Hash All Plaintext PINs Now")
-            if pin_migrate_go:
-                admin_name, err = resolve_admin_code(pin_migrate_code, staff_pins)
-                if err:
-                    st.session_state["pin_migrate_error"] = err
-                elif not pin_migrate_confirm:
-                    st.session_state["pin_migrate_error"] = "Tick the confirm box first."
-                else:
-                    try:
-                        n = migrate_staff_pins_to_hashed()
-                        log_audit_event(admin_name, "Hashed plaintext PINs", f"{n} row(s)")
-                        st.session_state["pin_migrate_flash"] = f"{admin_name} hashed {n} staff PIN(s)."
-                    except Exception:
-                        st.session_state["pin_migrate_error"] = (
-                            "Could not update the staff sheet right now. Please try again."
-                        )
-                st.rerun()
-
-    # -------------------------------------------------
     # AUDIT LOG: read-only trail of who did what admin action, and when
     # -------------------------------------------------
     with admin_section('Audit Log', 'History', open_=False):
         df_audit = load_audit_log_df_cached()
         if df_audit.empty:
-            st.caption("No audit events recorded yet. Every archive, deletion, and PIN migration shows up here.")
+            st.caption("No audit events recorded yet. Every archive and deletion shows up here.")
         else:
             df_audit_view = df_audit.tail(50).iloc[::-1].copy()
             df_audit_view["timestamp"] = _parse_ts(df_audit_view["timestamp"]).apply(format_time)
