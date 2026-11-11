@@ -66,7 +66,7 @@ SHEET_VANS = "vans"
 SHEET_STAFF = "staff"
 SHEET_DRIVERS = "drivers"
 SHEET_DAYS_OFF = "days_off"  # optional tab; used for the Day Off board (display only)
-SHEET_SETTINGS = "settings"  # auto-created; holds the campwide emergency flag
+SHEET_SETTINGS = "settings"  # auto-created; holds camp settings and bookkeeping
 SHEET_LOGS_ARCHIVE = "logs_archive"  # auto-created; permanent history moved out of the live tab
 SHEET_VANS_ARCHIVE = "vans_archive"  # auto-created; same idea, for the vans tab
 SHEET_AUDIT_LOG = "audit_log"  # auto-created; who did which destructive/admin action, and when
@@ -571,7 +571,7 @@ def get_settings_sheet():
     except WorksheetNotFound:
         ss = get_spreadsheet()
         sheet = ss.add_worksheet(title=SHEET_SETTINGS, rows=20, cols=2)
-        sheet.update("A1:B2", [["key", "value"], ["emergency", "FALSE"]])
+        sheet.update("A1:B1", [["key", "value"]])
         # Drop the cached lookup so the next call finds the new tab.
         try:
             get_worksheet.clear()
@@ -712,48 +712,6 @@ def get_setting(key: str) -> str:
 
 
 get_setting.clear = lambda: _settings_map.clear()
-
-
-EMERGENCY_KEY = "emergency"
-EMERGENCY_MESSAGE_KEY = "emergency_message"
-
-
-def is_emergency_active() -> bool:
-    """True if an admin has declared a campwide emergency.
-
-    The settings tab has carried this flag since the app's first version,
-    but nothing ever actually read it. Board pages pick this up within the
-    normal settings cache window (30s) plus their own refresh tick, so the
-    push notification sent when an emergency is declared is the fast channel
-    - this on-screen banner is the persistent one that follows shortly after.
-    """
-    return get_setting(EMERGENCY_KEY).strip().upper() == "TRUE"
-
-
-def get_emergency_message() -> str:
-    return get_setting(EMERGENCY_MESSAGE_KEY).strip()
-
-
-def set_emergency(active: bool, message: str = ""):
-    set_setting(EMERGENCY_KEY, "TRUE" if active else "FALSE")
-    set_setting(EMERGENCY_MESSAGE_KEY, message if active else "")
-
-
-def render_emergency_banner():
-    """Loud, non-dismissible banner shown at the top of every page while an
-    emergency is active. Cheap to call every render: get_setting is cached."""
-    if not is_emergency_active():
-        return
-    msg = get_emergency_message()
-    msg_html = f"<div class='sg-emergency-msg'>{esc(msg)}</div>" if msg else ""
-    st.markdown(
-        "<div class='sg-emergency' role='alert'>"
-        f"{flag('emergency', 73, wave=True)}"
-        "<div><div class='sg-emergency-word'>Campwide emergency in effect</div>"
-        f"{msg_html}</div>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
 
 
 # =================================================
@@ -3316,7 +3274,6 @@ def page_whos_out():
         # This board is the screen most likely to sit unattended, so it gets
         # its own check on the fragment's normal refresh tick instead of
         # waiting for a full page rerun like the other pages.
-        render_emergency_banner()
         live_clock_note()
         df_status = merge_recent_writes(load_current_status_df_cached())
         df_out = get_currently_out(df_status)
@@ -3863,66 +3820,6 @@ def page_admin_history(staff_pins: dict):
                 st.error("Could not check/create tabs right now. Please try again.")
 
     # -------------------------------------------------
-    # CAMPWIDE EMERGENCY: the most urgent control on this page, so it sits
-    # above everything else here.
-    # -------------------------------------------------
-    section_title("Campwide Emergency")
-
-    em_flash = st.session_state.pop("emergency_flash", "")
-    if em_flash:
-        st.success(em_flash)
-    em_err = st.session_state.pop("emergency_error", "")
-    if em_err:
-        st.error(em_err)
-
-    if is_emergency_active():
-        active_msg = get_emergency_message()
-        st.error("EMERGENCY IS ACTIVE" + (f" — {active_msg}" if active_msg else ""))
-        st.caption("Every page (Sign In/Out, Who's Out, Vans, Admin) is showing this banner right now.")
-        with st.form("emergency_clear_form", clear_on_submit=True):
-            em_clear_code = st.text_input("Your admin code", type="password", max_chars=4, key="emergency_clear_code")
-            em_clear_go = st.form_submit_button("Clear Emergency")
-        if em_clear_go:
-            admin_name, err = resolve_admin_code(em_clear_code, staff_pins)
-            if err:
-                st.session_state["emergency_error"] = err
-            else:
-                set_emergency(False)
-                log_audit_event(admin_name, "Emergency cleared")
-                notify_phone(f"{CAMP_NOTIFY_PREFIX}: Emergency CLEARED", f"Cleared by {admin_name}.")
-                st.session_state["emergency_flash"] = f"Emergency cleared by {admin_name}."
-            st.rerun()
-    else:
-        st.caption(
-            "Puts a red banner on every page, campwide, until an admin clears it. "
-            "Use for a real emergency only — this is deliberately hard to miss."
-        )
-        with st.form("emergency_declare_form", clear_on_submit=True):
-            em_msg = st.text_input(
-                "Message shown to everyone (optional)",
-                key="emergency_declare_msg",
-                placeholder="e.g. Meet at the flagpole",
-            )
-            em_declare_code = st.text_input("Your admin code", type="password", max_chars=4, key="emergency_declare_code")
-            em_confirm = st.checkbox("I understand this puts a red banner on every screen, campwide.")
-            em_go = st.form_submit_button("DECLARE EMERGENCY")
-        if em_go:
-            admin_name, err = resolve_admin_code(em_declare_code, staff_pins)
-            if err:
-                st.session_state["emergency_error"] = err
-            elif not em_confirm:
-                st.session_state["emergency_error"] = "Tick the confirm box first."
-            else:
-                set_emergency(True, em_msg.strip())
-                detail = f" {em_msg.strip()}" if em_msg.strip() else ""
-                log_audit_event(admin_name, "Emergency declared", em_msg.strip())
-                notify_phone(f"{CAMP_NOTIFY_PREFIX}: EMERGENCY DECLARED", f"By {admin_name}.{detail}")
-                st.session_state["emergency_flash"] = f"Emergency declared by {admin_name}."
-            st.rerun()
-
-    st.markdown("---")
-
-    # -------------------------------------------------
     # ADMIN SIGN-IN: fix the board when someone forgot
     # -------------------------------------------------
     admin_flash = st.session_state.pop("admin_flash", "")
@@ -4256,7 +4153,7 @@ def page_admin_history(staff_pins: dict):
     section_title("Audit Log")
     df_audit = load_audit_log_df_cached()
     if df_audit.empty:
-        st.caption("No audit events recorded yet. Every emergency, archive, deletion, and PIN migration shows up here.")
+        st.caption("No audit events recorded yet. Every archive, deletion, and PIN migration shows up here.")
     else:
         df_audit_view = df_audit.tail(50).iloc[::-1].copy()
         df_audit_view["timestamp"] = _parse_ts(df_audit_view["timestamp"]).apply(format_time)
@@ -4600,11 +4497,6 @@ def _main_body():
     # against this. Fragment-only refreshes do not run main(), so they do not
     # falsely count as activity.
     st.session_state["kiosk_active_at"] = datetime.now(TZ)
-
-    # Who's Out draws its own copy inside its refreshing board, so drawing one here
-    # as well showed the emergency banner twice on that page.
-    if page != "Who's Out":
-        render_emergency_banner()
 
     if page == "Sign In / Out":
         page_sign_in_out(staff_pins, staff_names)

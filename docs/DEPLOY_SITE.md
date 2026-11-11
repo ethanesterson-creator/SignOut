@@ -18,7 +18,6 @@ Edit `site/index.html` (all the copy is there), commit, push to `main`; Render r
 Run the demo camp locally with a busy board, then capture:
 ```bash
 .venv/Scripts/python.exe provision/stage_demo.py camps/camp-demo/secrets.toml          # busy board
-.venv/Scripts/python.exe provision/stage_demo.py camps/camp-demo/secrets.toml --emergency   # for the emergency shot
 .venv/Scripts/python.exe provision/reset_demo.py camps/camp-demo/secrets.toml          # clean up after
 ```
 The screenshots in `site/img/` were captured at 1366x768 from the demo only. Never use a real camp's data.

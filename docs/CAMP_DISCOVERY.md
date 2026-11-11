@@ -8,8 +8,7 @@ Ask open questions, write down their words. The `->` after a question says where
 with a 4-digit code on a shared Chromebook in the main building. Reasons carry deadlines
 (Period Off back before the period ends, Night Off back by 12:15 AM, Day Off back 7:45 the next
 morning). The board shows who is out and who is late. Three vans, each tracked with driver,
-passengers and gas. Group sign-outs for trips. Any admin can declare a campwide emergency that
-takes over every screen. The office gets a phone alert when someone is late.
+passengers and gas. Group sign-outs for trips. The office gets a phone alert when someone is late.
 
 ---
 
@@ -59,8 +58,6 @@ takes over every screen. The office gets a phone alert when someone is late.
 
 ## 7. Emergencies
 - If there's an emergency, how do you reach and account for everyone today?
-- Would a screen takeover ("campwide emergency in effect", message from the director, on every kiosk) help?  -> *emergency banner*
-- Who is allowed to declare it?  -> *admin flags*
 
 ## 8. The device and the room
 - Where would it live (office, dining hall, front gate, health center)? One spot or several?
@@ -112,7 +109,7 @@ Late/forgot threshold:     Alerts go to:
 Schedule same daily? Y/N   Periods:
 Vehicles? Y/N  Names:                 Per-trip details:
 Driver list? Y/N           Trip purposes:
-Group sign-out? Y/N        Days-off board? Y/N       Emergency banner? Y/N
+Group sign-out? Y/N        Days-off board? Y/N
 Device / screen:           Wifi OK? Y/N
 Google: personal or Workspace?         Can share outside? Y/N
 Decision maker:            Budget time:              Pilot OK? Y/N
