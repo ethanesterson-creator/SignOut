@@ -225,8 +225,6 @@ Director: {intake.get('director_name', '')} <{intake.get('director_email', '')}>
 - [ ] Open "New Camp Setup" > "Create Any Missing Tabs".
 - [ ] Paste `staff_import.csv` ({n_staff} staff) into the Sheet's `staff` tab (A1 down).
       Paste `drivers_import.csv` into `drivers` if it exists.
-- [ ] Admin > Staff PIN Security > "Hash All Plaintext PINs Now" (the codes in the Sheet
-      become unreadable; the camp keeps `staff_import.csv` to hand out codes, then deletes it).
 - [ ] Edit the `schedule` tab if the real times differ.
 
 ## Test day (before opening day)

@@ -50,8 +50,7 @@ How you keep every camp healthy without being at any of them.
 ```
 Writes `backups/<camp>/<date>/<tab>.csv` (read-only on the Sheet), keeps 30 days. Run it nightly
 for every camp (Windows Task Scheduler on the computer that holds `camps/`). `backups/` and
-`camps/` are git-ignored: the staff tab contains codes (hashed once the camp has run the PIN
-hashing step), so treat that folder as private.
+`camps/` are git-ignored: the staff tab contains the staff codes, so treat that folder as private.
 
 ## Restoring
 Open the CSV in the dated backup, copy the rows back into the camp's Sheet tab. For a whole-tab
