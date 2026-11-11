@@ -22,7 +22,6 @@ That is the sign-out moment. The whole interface is one disciplined grammar:
 | **Out** (on time) | Blue Peter | Navy field, white center | Solid square with inset |
 | **Out, due soon** | Swallowtail | Navy + gold | Notched end |
 | **Late / no sign-in** | Burgee (pennant) | Red + white bands | Pointed triangle |
-| **Emergency** | Full-width banner, red and white halves | Red | Bar across every page |
 
 Status is carried by **shape first, color second**, so it reads from across the room and for color-blind viewers. The shapes are small inline SVG, authored here. They are not emoji and not an icon library.
 
@@ -44,7 +43,7 @@ Strategy: **Committed.** Navy owns whole regions (the side rail, the active stat
   --rule:        #C9D3E3;  /* hairlines and input borders */
   --ink-2:       #4A5B77;  /* secondary text. 7:1 on white */
 
-  --signal-red:  #C8102E;  /* late, emergency, destructive */
+  --signal-red:  #C8102E;  /* late, destructive */
   --red-tint:    #FCEBEE;
   --signal-gold: #F2B705;  /* due soon. FILL ONLY, never text on white */
   --gold-tint:   #FFF6D6;
@@ -84,7 +83,6 @@ One signature, used sparingly: **the hoist.** When a sign-out succeeds, the full
 - **Loading:** flag-line skeleton rows, no spinners centered on a blank page.
 - **Error:** plain-language panel with a Reload button (the existing safety-net screen restyled).
 - **Success:** the hoist banner with name, reason, and due-back time, readable at arm's length.
-- **Emergency:** full-width red-and-white banner pinned to every page, unmistakable, no motion.
 
 ## Copy (in scope: you approved UX and copy changes)
 

@@ -53,16 +53,14 @@
           <figure class="slide is-active" id="s0" role="tabpanel" aria-labelledby="t0"><img src="img/whos-out.webp" width="2049" height="1152" alt="The Who's Out board with two counselors marked late in red, others signed out for a day off, a dentist visit, a van trip and a night off." fetchpriority="high"></figure>
           <figure class="slide" id="s1" role="tabpanel" aria-labelledby="t1" aria-hidden="true"><img src="img/signout-banner.webp" width="2049" height="1152" alt="The sign-in screen confirming that a counselor is signed out, with an undo button and the list of who is out right now." loading="lazy"></figure>
           <figure class="slide" id="s2" role="tabpanel" aria-labelledby="t2" aria-hidden="true"><img src="img/vans.webp" width="2049" height="1152" alt="The vans screen showing one van out with its driver and three quarters of a tank of gas, and one van at camp." loading="lazy"></figure>
-          <figure class="slide" id="s3" role="tabpanel" aria-labelledby="t3" aria-hidden="true"><img src="img/emergency.webp" width="2049" height="1152" alt="A red campwide emergency banner with a message from the director shown across the top of the sign-in screen." loading="lazy"></figure>
-          <figure class="slide" id="s4" role="tabpanel" aria-labelledby="t4" aria-hidden="true"><img src="img/group.webp" width="2049" height="1152" alt="The group sign-out screen where one leader signs out a whole group for a field trip." loading="lazy"></figure>
+          <figure class="slide" id="s3" role="tabpanel" aria-labelledby="t3" aria-hidden="true"><img src="img/group.webp" width="2049" height="1152" alt="The group sign-out screen where one leader signs out a whole group for a field trip." loading="lazy"></figure>
         </div>
         <div class="tabs">
           <div class="tablist" role="tablist" aria-label="Choose a screen">
             <button class="tab" role="tab" id="t0" aria-selected="true" aria-controls="s0" type="button">Who's out</button>
             <button class="tab" role="tab" id="t1" aria-selected="false" aria-controls="s1" tabindex="-1" type="button">Sign out</button>
             <button class="tab" role="tab" id="t2" aria-selected="false" aria-controls="s2" tabindex="-1" type="button">Vans</button>
-            <button class="tab" role="tab" id="t3" aria-selected="false" aria-controls="s3" tabindex="-1" type="button">Emergency</button>
-            <button class="tab" role="tab" id="t4" aria-selected="false" aria-controls="s4" tabindex="-1" type="button">Groups</button>
+            <button class="tab" role="tab" id="t3" aria-selected="false" aria-controls="s3" tabindex="-1" type="button">Groups</button>
           </div>
           <button class="pause" id="pause" type="button" aria-pressed="false">Pause</button>
         </div>
@@ -113,10 +111,10 @@
         </article>
         <article class="cell c-d reveal" style="--i:1">
           <div class="txt">
-            <h3>One tap and every screen turns red.</h3>
-            <p>Declare a campwide emergency and each kiosk shows your message until you clear it.</p>
+            <h3>Trips leave together.</h3>
+            <p>One leader signs out a whole group for a field trip or an outing, and the board shows them all as out until they return.</p>
           </div>
-          <div class="shot"><img src="img/emergency.webp" width="2049" height="1152" alt="The campwide emergency banner." loading="lazy"></div>
+          <div class="shot"><img src="img/group.webp" width="2049" height="1152" alt="The group sign-out screen where one leader signs out a whole group." loading="lazy"></div>
         </article>
       </div>
     </div>
@@ -226,10 +224,8 @@
   </div>
 </footer>
 
-<!-- Cloudflare Web Analytics (free, no cookies, no personal data). To turn it on: create the site in
-     Cloudflare (steps in docs/DEPLOY_SITE.md), paste the token below, and remove these comment markers.
-<script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "PASTE_YOUR_TOKEN_HERE"}'></script>
--->
+<!-- Cloudflare Web Analytics (free, no cookies, no personal data). The token is public by design. -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0ebab2e92b624b57bcf8fc45ea2d3387"}'></script>
 <script src="script.js?v=02220c3a" defer></script>
 </body>
 </html>

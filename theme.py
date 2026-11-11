@@ -124,11 +124,6 @@ def _shape(kind: str):
             f"<polygon points='0,0 48,0 0,32' fill='{GOLD}'/>",
             "<rect width='48' height='32'/>",
         )
-    if kind == "emergency":  # red / white halves
-        return (
-            f"<rect width='24' height='32' fill='{WHITE}'/><rect x='24' width='24' height='32' fill='{RED}'/>",
-            "<rect width='48' height='32'/>",
-        )
     # in camp: white field with navy frame
     return (
         f"<rect width='48' height='32' fill='{WHITE}'/>"
@@ -141,7 +136,7 @@ _flag_seq = [0]
 
 
 def flag(kind: str, height: int = 28, label: str = "", wave: bool = False) -> str:
-    """Inline SVG signal flag. kind: in | out | soon | late | forgot | emergency.
+    """Inline SVG signal flag. kind: in | out | soon | late | forgot.
 
     Shapes differ on purpose (plain, inset square, pennant, split square) so
     status never depends on colour alone. wave=True renders real rippling cloth:
@@ -639,11 +634,6 @@ div[data-testid="stExpander"] summary p { font-weight: 600; font-size: 1rem; col
 .sg-inline-flash { border: 1px solid var(--line-strong); background: var(--glass-2); border-radius: var(--r); padding: var(--s-2) var(--s-3); font-weight: 600; margin-bottom: var(--s-2); animation: sgFade 2.4s var(--ease-out) forwards; }
 @keyframes sgFade { 0% { opacity: 0; } 10% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
 
-/* ---------- emergency: the loudest thing in the app, and still ---------- */
-.sg-emergency { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: var(--s-3); align-items: center; background: linear-gradient(135deg, #F0294A, #B8112F); color: #fff; border-radius: 18px; padding: var(--s-3) var(--s-4); margin: 0 0 var(--s-3) 0; border: 2px solid #ff9aa9; box-shadow: 0 40px 80px -30px rgba(229,33,63,0.85), inset 0 1px 0 rgba(255,255,255,0.4); }
-.sg-emergency .sg-flag { width: 72px; height: 48px; }
-.sg-emergency-word { font-family: var(--font-display); font-size: 2.2rem; font-weight: 900; letter-spacing: 0.02em; text-transform: uppercase; line-height: 0.95; color: #fff; }
-.sg-emergency-msg { font-size: 1.1rem; font-weight: 600; margin-top: 8px; color: #fff; }
 
 .sg-footer { margin-top: var(--s-2); padding-top: var(--s-1); border-top: 1px solid var(--line); font-family: var(--font-display); font-size: 0.85rem; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-3); }
 
@@ -705,8 +695,6 @@ div[data-testid="stExpander"] summary p { font-weight: 600; font-size: 1rem; col
     .sg-flash { grid-template-columns: 96px minmax(0, 1fr); padding: var(--s-3); gap: var(--s-3); }
     .sg-halyard { width: 96px; height: 120px; }
     .sg-halyard .sg-flag { width: 78px; height: 52px; }
-    .sg-emergency { grid-template-columns: 1fr; }
-    .sg-emergency-word { font-size: 2.3rem; }
     [data-testid="stElementContainer"]:has(iframe) { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {

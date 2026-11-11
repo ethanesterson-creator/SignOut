@@ -1,6 +1,6 @@
 """Put a realistic, busy moment on the demo camp's board.
 
-    python provision/stage_demo.py camps/camp-demo/secrets.toml [--emergency]
+    python provision/stage_demo.py camps/camp-demo/secrets.toml
 
 Clears the demo's history first, then writes people who are out right now: some
 on time, two late, one who never signed back in, plus a van on a trip. Everything is
@@ -128,7 +128,6 @@ def main(argv=None):
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("secrets")
-    ap.add_argument("--emergency", action="store_true", help="also declare a sample campwide emergency")
     args = ap.parse_args(argv)
     with open(args.secrets, "rb") as f:
         secrets = tomllib.load(f)
@@ -153,20 +152,7 @@ def main(argv=None):
     _write(sheet.worksheet("current_status"), STATUS_HEADERS, scene["status"])
     _write(sheet.worksheet("logs"), LOG_HEADERS, scene["logs"])
     _write(sheet.worksheet("vans"), VAN_HEADERS, scene["vans"])
-    if args.emergency:
-        ws = sheet.worksheet("settings")
-        vals = ws.get_all_values()
-        for i, row in enumerate(vals, start=1):
-            if row and row[0] == "emergency":
-                ws.update_cell(i, 2, "TRUE")
-        keys = [r[0] for r in vals if r]
-        msg = "Severe thunderstorm. Everyone report to your cabin counselors now."
-        if "emergency_message" in keys:
-            ws.update_cell(keys.index("emergency_message") + 1, 2, msg)
-        else:
-            ws.append_row(["emergency_message", msg])
-    print(f"Staged: {len(scene['status'])} people out, {len(scene['vans'])} van trip."
-          + (" Emergency on." if args.emergency else ""))
+    print(f"Staged: {len(scene['status'])} people out, {len(scene['vans'])} van trip.")
     return 0
 
 

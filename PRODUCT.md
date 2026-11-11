@@ -21,11 +21,11 @@ SignOut tells a summer camp who is off-site, where, since when, and whether they
 
 ## Positioning
 
-A camp-specific sign-out board (vans, groups, schedules, emergency mode, late alerts) configured per camp through secrets, possibly sold to other camps later.
+A camp-specific sign-out board (vans, groups, schedules, late alerts) configured per camp through secrets, possibly sold to other camps later.
 
 ## Operating Context
 
-Shared kiosk computer, frequently idle; returns to the home page after idle. Boards auto-refresh each minute. Five pages: Sign In / Out, Who's Out, Vans, Group Sign-Out, Admin / History. Emergency banner appears on every page.
+Shared kiosk computer, frequently idle; returns to the home page after idle. Boards auto-refresh each minute. Five pages: Sign In / Out, Who's Out, Vans, Group Sign-Out, Admin / History.
 
 ## Capabilities and Constraints
 
