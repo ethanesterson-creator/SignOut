@@ -93,7 +93,7 @@ CURRENT_STATUS_HEADERS = ["name", "status", "reason", "other_reason", "timestamp
 
 # How often the live board silently re-archives old logs on its own, so the
 # live tab never grows unbounded just because nobody remembered to click
-# "Archive Old Logs Now". Deduped on the calendar date, same pattern as the
+# "Tidy Up Now". Deduped on the calendar date, same pattern as the
 # nightly summary, so it runs once a day no matter how many times the board
 # ticks after the hour.
 AUTO_ARCHIVE_HOUR = CFG.auto_archive_hour
@@ -1548,105 +1548,6 @@ def get_pending_undo():
     return u
 
 
-def clear_all_logs():
-    livecache.drain(8)  # don't let a queued write land after the wipe
-    try:
-        sheet = get_worksheet(SHEET_LOGS)
-        sheet.clear()
-        sheet.insert_row(LOGS_HEADERS_REQUIRED, 1)
-        clear_logs_cache()
-        # The header order just changed, and every old sign-out id is gone, so
-        # drop both caches or the next write could use the old column order.
-        try:
-            get_log_headers.clear()
-            set_setting(LATE_ALERT_KEY, "")
-        except Exception:
-            pass
-        try:
-            rebuild_current_status_from_logs()
-        except Exception:
-            pass
-    except (APIError, GSpreadException):
-        st.error("Could not clear logs in Google Sheets. Please try again later.")
-        st.stop()
-
-
-def delete_logs_by_ids(ids_to_delete):
-    """Delete specific log rows by id, in place.
-
-    Finds and deletes exactly the matched rows straight on the live sheet,
-    highest row number first so an earlier delete never shifts a later row
-    out from under it - the same approach delete_log_row_by_id already uses
-    for a single row. The previous version rewrote the WHOLE tab instead:
-    sheet.clear() first, then reinsert everything from load_logs_df_cached()
-    (up to 10s stale). That meant a sign-in/out written in the last few
-    seconds was silently missing from the rewrite and permanently lost, and
-    if append_rows failed after the clear() had already succeeded (a network
-    blip mid-write), EVERY row in the tab was gone, not just the ones picked
-    for deletion. Reading ids fresh off the sheet and deleting only those
-    rows removes both failure modes: nothing is ever cleared wholesale, and
-    the id lookup can't miss a row written moments ago.
-
-    All matched rows are removed in ONE batchUpdate call, not one
-    sheet.delete_rows() per row. That method makes its own network round trip
-    every time it is called, so ticking off a season's worth of pre-season
-    test entries (or any double-digit selection) meant a delete that took
-    several seconds and could trip Google's per-minute write-request quota
-    partway through, silently leaving some selected rows deleted and others
-    still on the board with no way to tell which from the UI. A single batch
-    of deleteDimension requests - still highest row first, so index shifts
-    from earlier deletes in the same batch never disturb a later one - does
-    the whole selection in one call.
-    """
-    ids_to_delete = {str(i).strip() for i in ids_to_delete if str(i).strip()}
-    if not ids_to_delete:
-        return
-
-    livecache.drain(8)  # queued sign-in/outs must be in the sheet to be found
-    try:
-        sheet = get_worksheet(SHEET_LOGS)
-        all_vals = sheet.get_all_values()
-    except (APIError, GSpreadException):
-        st.error("Could not update logs in Google Sheets. Please try again later.")
-        st.stop()
-
-    if not all_vals:
-        return
-
-    header = all_vals[0]
-    id_col = header.index("id") if "id" in header else 0
-
-    rows_to_delete = [
-        i + 2 for i, row in enumerate(all_vals[1:])
-        if id_col < len(row) and row[id_col].strip() in ids_to_delete
-    ]
-    if not rows_to_delete:
-        return
-
-    try:
-        delete_requests = [
-            {
-                "deleteDimension": {
-                    "range": {
-                        "sheetId": sheet.id,
-                        "dimension": "ROWS",
-                        "startIndex": row_num - 1,
-                        "endIndex": row_num,
-                    }
-                }
-            }
-            for row_num in sorted(rows_to_delete, reverse=True)
-        ]
-        sheet.spreadsheet.batch_update({"requests": delete_requests})
-        clear_logs_cache()
-        try:
-            rebuild_current_status_from_logs()
-        except Exception:
-            pass
-    except (APIError, GSpreadException):
-        st.error("Could not finish deleting selected log entries. Please try again later.")
-        st.stop()
-
 # =================================================
 # LOGIC HELPERS
 # =================================================
@@ -1893,9 +1794,9 @@ def archive_old_logs():
             pass
     except Exception:
         result["message"] = (
-            f"Archived {len(archive_rows)} rows to logs_archive, but shrinking the "
-            "live tab did not fully finish. Nothing was lost. Run it once more, "
-            "or check the logs tab."
+            f"Moved {len(archive_rows)} old sign-outs to the archive, but could not finish "
+            "tidying the main list. Nothing was lost. Please press the button once more, "
+            "or tell your Headcount contact."
         )
         result["archived"] = len(archive_rows)
         return result
@@ -1903,9 +1804,9 @@ def archive_old_logs():
     result["ok"] = True
     result["archived"] = len(archive_rows)
     result["message"] = (
-        f"Archived {len(archive_rows)} old rows to logs_archive. The live tab now "
-        f"holds {len(keep_rows)} rows (everyone still out, plus the last "
-        f"{ARCHIVE_KEEP_DAYS} days). Nothing was deleted, only moved."
+        f"Done. Moved {len(archive_rows)} old sign-outs to the archive. "
+        f"{len(keep_rows)} recent ones (everyone still out, plus the last "
+        f"{ARCHIVE_KEEP_DAYS} days) stay on the main list. Nothing was deleted."
     )
     return result
 
@@ -2034,9 +1935,9 @@ def archive_old_vans():
             pass
     except Exception:
         result["message"] = (
-            f"Archived {len(archive_rows)} rows to vans_archive, but shrinking the "
-            "live tab did not fully finish. Nothing was lost. Run it once more, "
-            "or check the vans tab."
+            f"Moved {len(archive_rows)} old van trips to the archive, but could not finish "
+            "tidying the main list. Nothing was lost. Please press the button once more, "
+            "or tell your Headcount contact."
         )
         result["archived"] = len(archive_rows)
         return result
@@ -2044,9 +1945,9 @@ def archive_old_vans():
     result["ok"] = True
     result["archived"] = len(archive_rows)
     result["message"] = (
-        f"Archived {len(archive_rows)} old van rows to vans_archive. The live tab "
-        f"now holds {len(keep_rows)} rows (every van still out, plus the last "
-        f"{ARCHIVE_KEEP_DAYS} days). Nothing was deleted, only moved."
+        f"Done. Moved {len(archive_rows)} old van trips to the archive. "
+        f"{len(keep_rows)} recent ones (every van still out, plus the last "
+        f"{ARCHIVE_KEEP_DAYS} days) stay on the main list. Nothing was deleted."
     )
     return result
 
@@ -4122,17 +4023,17 @@ def page_admin_history(staff_pins: dict):
                     locked = ratelimit.ADMIN_PASSWORD.fail()
                     if locked:
                         _report_code_lock("admin passwords", locked)
-                    st.error("Incorrect password (or admin_password not set in secrets).")
+                    st.error("That password is not right." if ADMIN_PASSWORD else "No admin password has been set up yet. Please contact Headcount.")
         st.stop()
 
-    with st.expander("Admin Session", expanded=False):
-        st.caption("You are logged in to the admin area.")
-        if st.button("Lock Admin Area", key="admin_logout_btn"):
+    with st.expander("Lock this page", expanded=False):
+        st.caption("You are signed in to Admin. Lock it when you walk away from the screen.")
+        if st.button("Lock Admin", key="admin_logout_btn"):
             st.session_state.admin_authenticated = False
-            st.success("Admin area locked again.")
+            st.success("Admin is locked.")
             st.rerun()
 
-    ADMIN_GROUPS = ["Today", "People", "History", "Setup"]
+    ADMIN_GROUPS = ["Today", "People", "History", "Tools"]
     admin_tabs = dict(zip(ADMIN_GROUPS, st.tabs(ADMIN_GROUPS))) if CFG.compact_admin else {}
     if CFG.server_late_check:
         if CFG.compact_admin:
@@ -4158,25 +4059,6 @@ def page_admin_history(staff_pins: dict):
             yield
             if divider:
                 st.markdown("---")
-
-    with admin_section("New Camp Setup (run once, on a brand new spreadsheet)", "Setup", plain_expander=True):
-        st.caption(
-            "Creates every tab this app needs — staff, drivers, days_off, logs, vans, "
-            "and the auto-managed tabs below them — with the right headers, so a fresh "
-            "Google Sheet works immediately. Only ever creates a tab that's missing; "
-            "never touches or overwrites one that already exists, so this is safe to "
-            "run again later if you add a tab by hand and want the rest double-checked."
-        )
-        if st.button("Create Any Missing Tabs", key="bootstrap_sheets_btn"):
-            try:
-                with st.spinner("Checking the spreadsheet and creating any missing tabs..."):
-                    created = bootstrap_new_camp_sheets()
-                if created:
-                    st.success(f"Created: {', '.join(created)}. Add staff names/PINs to the staff tab to get started.")
-                else:
-                    st.info("Every tab already exists — nothing to create.")
-            except Exception:
-                st.error("Could not check/create tabs right now. Please try again.")
 
     # -------------------------------------------------
     # ADMIN SIGN-IN: fix the board when someone forgot
@@ -4289,16 +4171,18 @@ def page_admin_history(staff_pins: dict):
                     st.session_state["admin_flash"] = f"{van_label(which_van)} signed in by {admin_name}."
                     st.rerun()
 
+    if CFG.downtime_sheet:
+        with admin_section("Paper Sheet for When the Wifi Is Down", "Tools"):
+            render_downtime_sheet()
+
     # -------------------------------------------------
     # ARCHIVE: keep the live tab small, keep history forever
     # -------------------------------------------------
-    with admin_section('Archive Old Logs', 'Setup', open_=False):
+    with admin_section('Tidy Up Old Sign-Outs', 'Tools', open_=False):
         st.caption(
-            "Moves old, closed-out sign-outs to a separate logs_archive tab so the "
-            "app stays fast. Everyone still signed out is kept, plus the last "
-            f"{ARCHIVE_KEEP_DAYS} days. Nothing is ever deleted, only moved. This "
-            f"now also runs automatically every night around {AUTO_ARCHIVE_HOUR}:00 "
-            "AM — use the button below only if you want it to run right now."
+            "Moves old, finished sign-outs to a separate tab so the app stays fast. Nothing is deleted, "
+            f"and anyone still out, plus the last {ARCHIVE_KEEP_DAYS} days, stays where it is. This runs by itself "
+            f"every night around {AUTO_ARCHIVE_HOUR}:00 AM, so you rarely need to press the button."
         )
 
         arch_flash = st.session_state.pop("archive_flash", "")
@@ -4309,10 +4193,10 @@ def page_admin_history(staff_pins: dict):
             st.error(arch_err)
 
         with st.form("archive_form", clear_on_submit=True):
-            st.caption("Type your admin code and confirm to archive.")
+            st.caption("Type your admin code to confirm.")
             arch_code = code_box("Your admin code", max_chars=4, key="archive_admin_code")
-            arch_confirm = st.checkbox("I understand old closed-out rows will be moved to the archive tab.")
-            arch_go = st.form_submit_button("Archive Old Logs Now")
+            arch_confirm = st.checkbox("I understand old sign-outs will move to a separate archive tab.")
+            arch_go = st.form_submit_button("Tidy Up Now")
 
         if arch_go:
             admin_name, err = resolve_admin_code(arch_code, staff_pins)
@@ -4333,7 +4217,7 @@ def page_admin_history(staff_pins: dict):
                     st.session_state["archive_error"] = res["message"]
                 st.rerun()
 
-        st.caption("Full 10-year record, live plus archive, in one file:")
+        st.caption("Everything ever recorded, including archived sign-outs, in one file:")
         # Built only on demand. This reads BOTH tabs, which can be thousands of
         # rows, so doing it on every admin page load would make the page crawl.
         # The button prepares it, then the download appears.
@@ -4355,18 +4239,16 @@ def page_admin_history(staff_pins: dict):
                 key="full_history_dl",
             )
         elif full_csv == "":
-            st.caption("Press the button above to build the download.")
+            st.caption("Press the button above to prepare the download.")
 
     # -------------------------------------------------
     # VAN ARCHIVE: same idea as the logs archive, for the vans tab
     # -------------------------------------------------
-    with admin_section('Archive Old Van Logs', 'Setup', open_=False):
+    with admin_section('Tidy Up Old Van Trips', 'Tools', open_=False):
         st.caption(
-            "Moves old, closed-out van trips to a separate vans_archive tab, same "
-            "idea as the logs archive above. Every van still out is kept, plus the "
-            f"last {ARCHIVE_KEEP_DAYS} days. Nothing is ever deleted, only moved. "
-            f"This also runs automatically every night around {AUTO_ARCHIVE_HOUR}:00 "
-            "AM — use the button below only if you want it to run right now."
+            "Same idea for van trips. Old, finished trips move to a separate tab so the app stays fast. "
+            f"Nothing is deleted, and any van still out, plus the last {ARCHIVE_KEEP_DAYS} days, stays where it is. "
+            f"This runs by itself every night around {AUTO_ARCHIVE_HOUR}:00 AM."
         )
 
         van_arch_flash = st.session_state.pop("van_archive_flash", "")
@@ -4377,10 +4259,10 @@ def page_admin_history(staff_pins: dict):
             st.error(van_arch_err)
 
         with st.form("van_archive_form", clear_on_submit=True):
-            st.caption("Type your admin code and confirm to archive.")
+            st.caption("Type your admin code to confirm.")
             van_arch_code = code_box("Your admin code", max_chars=4, key="van_archive_admin_code")
-            van_arch_confirm = st.checkbox("I understand old closed-out van rows will be moved to the archive tab.")
-            van_arch_go = st.form_submit_button("Archive Old Van Logs Now")
+            van_arch_confirm = st.checkbox("I understand old van trips will move to a separate archive tab.")
+            van_arch_go = st.form_submit_button("Tidy Up Van Trips Now")
 
         if van_arch_go:
             admin_name, err = resolve_admin_code(van_arch_code, staff_pins)
@@ -4401,7 +4283,7 @@ def page_admin_history(staff_pins: dict):
                     st.session_state["van_archive_error"] = van_res["message"]
                 st.rerun()
 
-        st.caption("Full van history, live plus archive, in one file:")
+        st.caption("Every van trip ever recorded, including archived ones, in one file:")
         if st.button("Prepare full van history file", key="prep_full_van_history"):
             try:
                 with st.spinner("Gathering live and archived van history..."):
@@ -4420,140 +4302,11 @@ def page_admin_history(staff_pins: dict):
                 key="full_van_history_dl",
             )
         elif full_van_csv == "":
-            st.caption("Press the button above to build the download.")
+            st.caption("Press the button above to prepare the download.")
 
-    # -------------------------------------------------
-    # STATUS CACHE: recovery tool for the current_status fast-path tab
-    # -------------------------------------------------
-    with admin_section('Rebuild Status Cache', 'Setup', open_=False):
-        st.caption(
-            "The board and sign-in box read a small current_status tab instead of "
-            "the full history, to stay fast. It updates itself on every sign-in/out "
-            "automatically. Use this only if something looks wrong on the board "
-            "after hand-editing rows directly in the logs sheet — it recomputes "
-            "current_status from scratch by scanning the full history. Nothing in "
-            "logs is ever touched by this."
-        )
-        if st.button("Rebuild Status Cache From History", key="rebuild_status_cache_btn"):
-            try:
-                with st.spinner("Recomputing current status from the full log history..."):
-                    clear_logs_cache()
-                    rebuild_current_status_from_logs()
-                st.success("Status cache rebuilt from history.")
-            except Exception:
-                st.error("Could not rebuild the status cache right now. Please try again.")
+    df_logs = load_logs_df_cached()
 
-    # -------------------------------------------------
-    # AUDIT LOG: read-only trail of who did what admin action, and when
-    # -------------------------------------------------
-    with admin_section('Audit Log', 'History', open_=False):
-        df_audit = load_audit_log_df_cached()
-        if df_audit.empty:
-            st.caption("No audit events recorded yet. Every archive and deletion shows up here.")
-        else:
-            df_audit_view = df_audit.tail(50).iloc[::-1].copy()
-            df_audit_view["timestamp"] = _parse_ts(df_audit_view["timestamp"]).apply(format_time)
-            df_audit_view = df_audit_view.rename(columns={
-                "timestamp": "When", "admin": "Who", "action": "Action", "detail": "Detail",
-            })
-            cols = [c for c in ["When", "Who", "Action", "Detail"] if c in df_audit_view.columns]
-            st.dataframe(df_audit_view[cols], use_container_width=True)
-            st.caption(f"Showing the most recent {len(df_audit_view)} of {len(df_audit)} audit event(s).")
-
-    with admin_section('Analytics', 'History', open_=False):
-        df_logs = load_logs_df_cached()
-
-        # -------------------------------------------------
-        # ANALYTICS: real numbers instead of just a raw filtered table. Computed
-        # entirely from the already-loaded logs/vans DataFrames, so this costs no
-        # extra Sheets round trips.
-        # -------------------------------------------------
-        if df_logs.empty:
-            st.info("No logs recorded yet.")
-        else:
-            df_out_rows = df_logs[df_logs["action"] == "OUT"]
-            df_in_rows = df_logs[df_logs["action"] == "IN"]
-
-            today_date = datetime.now(TZ).date()
-            signouts_today = int((df_out_rows["timestamp"].dt.date == today_date).sum())
-            currently_out_count = len(get_currently_out(load_current_status_df_cached()))
-            late_mask = df_in_rows["late"].astype(str).str.strip() != ""
-            late_rate = (late_mask.sum() / len(df_in_rows) * 100) if len(df_in_rows) else 0
-
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Total sign-outs (live tab)", len(df_out_rows))
-            m2.metric("Sign-outs today", signouts_today)
-            m3.metric("Currently out", currently_out_count)
-            m4.metric("Late-return rate", f"{late_rate:.0f}%")
-
-            col_a, col_b = st.columns(2)
-            with col_a:
-                st.caption("Sign-outs per day, last 14 days")
-                cutoff = datetime.now(TZ) - timedelta(days=14)
-                recent_out = df_out_rows[df_out_rows["timestamp"] >= cutoff]
-                if recent_out.empty:
-                    st.caption("Nothing in the last 14 days.")
-                else:
-                    daily_counts = recent_out.groupby(recent_out["timestamp"].dt.date).size()
-                    daily_counts.index = daily_counts.index.astype(str)
-                    st.bar_chart(daily_counts, color=CHART_COLOR)
-            with col_b:
-                st.caption("Top reasons (live tab)")
-                reason_counts = df_out_rows["reason"].value_counts()
-                if reason_counts.empty:
-                    st.caption("No reasons recorded yet.")
-                else:
-                    st.bar_chart(reason_counts, color=CHART_COLOR)
-
-            st.caption("Late-return rate by person (3+ trips, live tab)")
-            late_by_name = (
-                df_in_rows.assign(is_late=late_mask)
-                .groupby("name")
-                .agg(trips=("is_late", "size"), late_count=("is_late", "sum"))
-            )
-            late_by_name = late_by_name[late_by_name["trips"] >= 3].copy()
-            if late_by_name.empty:
-                st.caption("Not enough data yet (need 3+ round trips for someone to show up here).")
-            else:
-                late_by_name["late_pct"] = (late_by_name["late_count"] / late_by_name["trips"] * 100).round(0).astype(int)
-                late_by_name = late_by_name.sort_values("late_pct", ascending=False).head(10).reset_index()
-                late_by_name = late_by_name.rename(columns={
-                    "name": "Name", "trips": "Trips", "late_count": "Late Returns", "late_pct": "Late %",
-                })
-                st.dataframe(late_by_name, use_container_width=True)
-
-            df_vans_all = load_vans_df_cached()
-            if not df_vans_all.empty and "action" in df_vans_all.columns:
-                van_out_rows = df_vans_all[df_vans_all["action"].astype(str).str.upper() == "OUT"]
-                if not van_out_rows.empty:
-                    st.caption("Van trips by vehicle (live tab)")
-                    st.bar_chart(van_out_rows["van"].value_counts(), color=CHART_COLOR)
-
-            weekly_cutoff = datetime.now(TZ) - timedelta(days=7)
-            weekly_out = df_out_rows[df_out_rows["timestamp"] >= weekly_cutoff]
-            weekly_in = df_in_rows[df_in_rows["timestamp"] >= weekly_cutoff]
-            weekly_late = weekly_in["late"].astype(str).str.strip() != ""
-            weekly_summary = (
-                weekly_out.assign(date=weekly_out["timestamp"].dt.date)
-                .groupby("date")
-                .size()
-                .reset_index(name="signouts")
-            )
-            if not weekly_in.empty:
-                late_per_day = weekly_in.assign(is_late=weekly_late, date=weekly_in["timestamp"].dt.date)
-                late_per_day = late_per_day.groupby("date")["is_late"].sum().reset_index(name="late_returns")
-                weekly_summary = weekly_summary.merge(late_per_day, on="date", how="outer").fillna(0)
-            else:
-                weekly_summary["late_returns"] = 0
-            weekly_summary = weekly_summary.sort_values("date")
-            st.download_button(
-                "Download This Week's Summary (CSV)",
-                data=weekly_summary.to_csv(index=False),
-                file_name=f"{CAMP_CSV_PREFIX}_weekly_summary.csv",
-                mime="text/csv",
-            )
-
-    with admin_section('Full Log History', 'History', open_=False):
+    with admin_section('Sign-Out History', 'History', open_=False):
         if df_logs.empty:
             st.info("No logs recorded yet.")
         else:
@@ -4620,7 +4373,7 @@ def page_admin_history(staff_pins: dict):
                 mime="text/csv",
             )
 
-    with admin_section('Van Log History', 'History', open_=False):
+    with admin_section('Van Trip History', 'History', open_=False):
         df_vans = load_vans_df_cached()
         if df_vans is None or df_vans.empty:
             st.info("No van logs recorded yet.")
@@ -4671,41 +4424,97 @@ def page_admin_history(staff_pins: dict):
                 mime="text/csv",
             )
 
-    with admin_section('Delete Specific Log Entries (for testing / pre-season only)', 'Setup', open_=False):
+    with admin_section('Analytics', 'History', open_=False):
+
+        # -------------------------------------------------
+        # ANALYTICS: real numbers instead of just a raw filtered table. Computed
+        # entirely from the already-loaded logs/vans DataFrames, so this costs no
+        # extra Sheets round trips.
+        # -------------------------------------------------
         if df_logs.empty:
-            st.info("No deletable entries.")
+            st.info("No logs recorded yet.")
         else:
-            id_to_label = {}
-            for _, row in df_logs.iterrows():
-                rid = str(row.get("id", "")).strip()
-                if not rid:
-                    continue
-                label = f"{rid} – {row.get('name','')} – {format_time(row.get('timestamp'))} – {row.get('action','')}"
-                id_to_label[rid] = label
+            df_out_rows = df_logs[df_logs["action"] == "OUT"]
+            df_in_rows = df_logs[df_logs["action"] == "IN"]
 
-            selected_labels = st.multiselect(
-                "Select entries to delete",
-                list(id_to_label.values()),
-                key="admin_delete_specific_multiselect",
+            today_date = datetime.now(TZ).date()
+            signouts_today = int((df_out_rows["timestamp"].dt.date == today_date).sum())
+            currently_out_count = len(get_currently_out(load_current_status_df_cached()))
+            late_mask = df_in_rows["late"].astype(str).str.strip() != ""
+            late_rate = (late_mask.sum() / len(df_in_rows) * 100) if len(df_in_rows) else 0
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total sign-outs", len(df_out_rows))
+            m2.metric("Sign-outs today", signouts_today)
+            m3.metric("Currently out", currently_out_count)
+            m4.metric("Late-return rate", f"{late_rate:.0f}%")
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.caption("Sign-outs per day, last 14 days")
+                cutoff = datetime.now(TZ) - timedelta(days=14)
+                recent_out = df_out_rows[df_out_rows["timestamp"] >= cutoff]
+                if recent_out.empty:
+                    st.caption("Nothing in the last 14 days.")
+                else:
+                    daily_counts = recent_out.groupby(recent_out["timestamp"].dt.date).size()
+                    daily_counts.index = daily_counts.index.astype(str)
+                    st.bar_chart(daily_counts, color=CHART_COLOR)
+            with col_b:
+                st.caption("Top reasons")
+                reason_counts = df_out_rows["reason"].value_counts()
+                if reason_counts.empty:
+                    st.caption("No reasons recorded yet.")
+                else:
+                    st.bar_chart(reason_counts, color=CHART_COLOR)
+
+            st.caption("Late-return rate by person (3 or more trips)")
+            late_by_name = (
+                df_in_rows.assign(is_late=late_mask)
+                .groupby("name")
+                .agg(trips=("is_late", "size"), late_count=("is_late", "sum"))
             )
+            late_by_name = late_by_name[late_by_name["trips"] >= 3].copy()
+            if late_by_name.empty:
+                st.caption("Not enough data yet (need 3+ round trips for someone to show up here).")
+            else:
+                late_by_name["late_pct"] = (late_by_name["late_count"] / late_by_name["trips"] * 100).round(0).astype(int)
+                late_by_name = late_by_name.sort_values("late_pct", ascending=False).head(10).reset_index()
+                late_by_name = late_by_name.rename(columns={
+                    "name": "Name", "trips": "Trips", "late_count": "Late Returns", "late_pct": "Late %",
+                })
+                st.dataframe(late_by_name, use_container_width=True)
 
-            selected_ids = [log_id for log_id, label in id_to_label.items() if label in selected_labels]
+            df_vans_all = load_vans_df_cached()
+            if not df_vans_all.empty and "action" in df_vans_all.columns:
+                van_out_rows = df_vans_all[df_vans_all["action"].astype(str).str.upper() == "OUT"]
+                if not van_out_rows.empty:
+                    st.caption("Van trips by vehicle")
+                    st.bar_chart(van_out_rows["van"].value_counts(), color=CHART_COLOR)
 
-            if selected_ids and st.button("Delete Selected Entries", key="admin_delete_specific_button"):
-                delete_logs_by_ids(selected_ids)
-                log_audit_event("(admin area, password gate only)", "Deleted specific logs", f"{len(selected_ids)} row(s): {', '.join(selected_ids)}")
-                st.success(f"Deleted {len(selected_ids)} log(s).")
-                st.rerun()
-
-    with admin_section('Delete ALL Logs (for testing / pre-season only)', 'Setup', open_=False, divider=False):
-        st.error("WARNING: This will delete ALL sign-in/out records from Google Sheets.")
-
-        confirm_all = st.checkbox("I understand this will permanently delete all logs.", key="admin_confirm_delete_all_logs")
-        if confirm_all and st.button("Delete ALL Logs", key="admin_delete_all_logs_button"):
-            clear_all_logs()
-            log_audit_event("(admin area, password gate only)", "Deleted ALL logs")
-            st.success("All logs cleared.")
-            st.rerun()
+            weekly_cutoff = datetime.now(TZ) - timedelta(days=7)
+            weekly_out = df_out_rows[df_out_rows["timestamp"] >= weekly_cutoff]
+            weekly_in = df_in_rows[df_in_rows["timestamp"] >= weekly_cutoff]
+            weekly_late = weekly_in["late"].astype(str).str.strip() != ""
+            weekly_summary = (
+                weekly_out.assign(date=weekly_out["timestamp"].dt.date)
+                .groupby("date")
+                .size()
+                .reset_index(name="signouts")
+            )
+            if not weekly_in.empty:
+                late_per_day = weekly_in.assign(is_late=weekly_late, date=weekly_in["timestamp"].dt.date)
+                late_per_day = late_per_day.groupby("date")["is_late"].sum().reset_index(name="late_returns")
+                weekly_summary = weekly_summary.merge(late_per_day, on="date", how="outer").fillna(0)
+            else:
+                weekly_summary["late_returns"] = 0
+            weekly_summary = weekly_summary.sort_values("date")
+            st.download_button(
+                "Download This Week's Summary (CSV)",
+                data=weekly_summary.to_csv(index=False),
+                file_name=f"{CAMP_CSV_PREFIX}_weekly_summary.csv",
+                mime="text/csv",
+            )
 
     if CFG.staff_directory:
         with admin_section("Staff Directory", "People"):
@@ -4713,9 +4522,23 @@ def page_admin_history(staff_pins: dict):
     if CFG.driver_cert_tracking:
         with admin_section("Driver Certifications", "People"):
             render_driver_certifications()
-    if CFG.downtime_sheet:
-        with admin_section("Paper Sheet for Downtime", "Setup"):
-            render_downtime_sheet()
+
+    with admin_section("Set Up a New Spreadsheet (one time only)", "Tools", plain_expander=True):
+        st.caption(
+            "Only needed for a brand new, empty Google Sheet. It adds every tab the app needs. "
+            "It never changes a tab that already exists, so it is safe to press again."
+        )
+        if st.button("Create Any Missing Tabs", key="bootstrap_sheets_btn"):
+            try:
+                with st.spinner("Checking the spreadsheet and creating any missing tabs..."):
+                    created = bootstrap_new_camp_sheets()
+                if created:
+                    st.success(f"Created: {', '.join(created)}. Add staff names/PINs to the staff tab to get started.")
+                else:
+                    st.info("Every tab already exists — nothing to create.")
+            except Exception:
+                st.error("Could not check/create tabs right now. Please try again.")
+
     crest_footer()
 
 # =================================================
